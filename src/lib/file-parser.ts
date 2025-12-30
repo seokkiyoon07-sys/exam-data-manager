@@ -111,6 +111,124 @@ function parseQuestionType(value: unknown): QuestionType {
   return QuestionType.MULTIPLE
 }
 
+// 출제기관 정규화: 교육청, 평가원, EBS 외에는 모두 "사설"로 처리
+const OFFICIAL_ORGANIZATIONS = ["교육청", "평가원", "ebs"]
+
+function normalizeOrganization(value: string): string {
+  const normalized = value.toLowerCase().trim()
+
+  for (const official of OFFICIAL_ORGANIZATIONS) {
+    if (normalized.includes(official.toLowerCase())) {
+      if (normalized.includes("교육청")) return "교육청"
+      if (normalized.includes("평가원")) return "평가원"
+      if (normalized.includes("ebs")) return "EBS"
+    }
+  }
+  return "사설"
+}
+
+// 사설 출제기관 코드 매핑
+const PRIVATE_ORG_CODES: Record<string, string> = {
+  "시대인재": "SDIJ",
+  "강남대성": "KNDS",
+  "대성": "KNDS",
+  "종로": "JONG",
+  "이투스": "ETOOS",
+  "메가스터디": "MEGA",
+}
+
+// 과목 코드 매핑
+function getSubjectCode(subject: string, subCategory?: string): string {
+  const sub = subCategory?.toLowerCase() || ""
+
+  if (subject === "국어") {
+    if (sub.includes("화법") || sub.includes("작문")) return "KOR_SPW"
+    if (sub.includes("언어") || sub.includes("매체")) return "KOR_LNM"
+    return "KOR"
+  }
+  if (subject === "수학") {
+    if (sub.includes("확률") || sub.includes("통계")) return "MATH_PS"
+    if (sub.includes("미적분")) return "MATH_CAL"
+    if (sub.includes("기하")) return "MATH_GEO"
+    if (sub.includes("가형")) return "MATH_GA"
+    if (sub.includes("나형")) return "MATH_NA"
+    return "MATH"
+  }
+  if (subject === "영어") return "ENG"
+  if (subject.includes("물리")) return "SCI_PHY"
+  if (subject.includes("화학")) return "SCI_CHM"
+  if (subject.includes("생명") || subject.includes("생물")) return "SCI_BIO"
+  if (subject.includes("지구과학")) return "SCI_EAS"
+
+  return subject.substring(0, 3).toUpperCase()
+}
+
+// 출제기관 코드 (시험지코드용)
+function getOrgCode(rawOrganization: string): string {
+  const org = rawOrganization.toLowerCase()
+
+  // 공식 기관
+  if (org.includes("수능")) return "S"
+  if (org.includes("평가원")) return "M"
+  if (org.includes("교육청")) return "H"
+
+  // 사설 기관
+  for (const [name, code] of Object.entries(PRIVATE_ORG_CODES)) {
+    if (org.includes(name.toLowerCase())) return code
+  }
+
+  // 알 수 없는 사설은 첫 두 글자
+  return rawOrganization.substring(0, 4).toUpperCase()
+}
+
+// 시험지코드 자동 생성
+// 형식: [시행일(yyMMdd)]_[과목코드]_[출제기관코드]_[학년코드]
+// 예: 240604_MATH_SDIJ_G3
+function generateExamCode(
+  problemType: string,
+  subject: string,
+  rawOrganization: string,
+  examYear: number,
+  subCategory?: string
+): string {
+  // 날짜 추출 시도 (문제종류에서)
+  // 예: "고3 2006.10.12 학력평가" -> 061012
+  // 예: "2026 학년도 전국시대인재 1회" -> 260101 (연도만 있으면 01월01일로)
+  let dateCode = ""
+
+  const dateMatch = problemType.match(/(\d{4})\.(\d{1,2})\.(\d{1,2})/)
+  if (dateMatch) {
+    const [, year, month, day] = dateMatch
+    dateCode = year.slice(2) + month.padStart(2, "0") + day.padStart(2, "0")
+  } else {
+    // 연도만 추출
+    const yearMatch = problemType.match(/(\d{4})\s*학년도/)
+    if (yearMatch) {
+      dateCode = yearMatch[1].slice(2) + "0101"
+    } else {
+      dateCode = String(examYear).slice(2) + "0101"
+    }
+  }
+
+  // 회차 추출
+  const roundMatch = problemType.match(/(\d+)\s*회/)
+  const round = roundMatch ? roundMatch[1] : ""
+
+  // 학년 추출
+  let grade = "G3" // 기본값
+  if (problemType.includes("고1")) grade = "G1"
+  else if (problemType.includes("고2")) grade = "G2"
+
+  const subjectCode = getSubjectCode(subject, subCategory)
+  const orgCode = getOrgCode(rawOrganization)
+
+  // 형식: 날짜_과목_기관_학년 (회차가 있으면 기관 뒤에)
+  if (round) {
+    return `${dateCode}_${subjectCode}_${orgCode}${round}_${grade}`
+  }
+  return `${dateCode}_${subjectCode}_${orgCode}_${grade}`
+}
+
 export function parseExcelFile(buffer: ArrayBuffer): ParseResult {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true })
   const sheetName = workbook.SheetNames[0]
@@ -172,7 +290,8 @@ export function parseExcelFile(buffer: ArrayBuffer): ParseResult {
       const indexVal = parseNumber(row["Index"])
       const examYear = parseNumber(row["시행년도"])
       const problemNumber = parseNumber(row["문항번호"])
-      const organization = row["출제기관"] as string
+      const rawOrganization = row["출제기관"] as string
+      const organization = rawOrganization ? normalizeOrganization(rawOrganization) : ""
       const subject = row["과목"] as string
 
       // 필수 필드 검증
@@ -197,13 +316,21 @@ export function parseExcelFile(buffer: ArrayBuffer): ParseResult {
         return
       }
 
+      // 시험지코드가 없으면 자동 생성
+      const problemType = row["문제종류"] as string || ""
+      const subCategory = row["소분류1"] as string || undefined
+      let examCode = row["시험지코드"] as string || ""
+      if (!examCode && problemType) {
+        examCode = generateExamCode(problemType, subject, rawOrganization, examYear, subCategory)
+      }
+
       const problem: ParsedProblem = {
         index: indexVal,
-        problemType: row["문제종류"] as string || undefined,
-        examCode: row["시험지코드"] as string || undefined,
+        problemType: problemType || undefined,
+        examCode: examCode || undefined,
         organization,
         subject,
-        subCategory: row["소분류1"] as string || undefined,
+        subCategory,
         examYear,
         problemNumber,
         questionType: parseQuestionType(row["객관식주관식"]),

@@ -86,7 +86,7 @@ export function ValidationSummary({ issues }: ValidationSummaryProps) {
 
               return (
                 <Link
-                  key={issue.ruleCode}
+                  key={`${issue.ruleCode}-${index}`}
                   href={`/problems?hasError=true`}
                   className="block group"
                 >

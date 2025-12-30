@@ -29,7 +29,7 @@ enum Role {
 // 문항 (핵심 테이블)
 model Problem {
   id    String @id @default(cuid())
-  index Int    @unique // 원본 Index
+  index Int // 원본 Index (과목별 고유)
 
   // 식별 정보
   problemType  String? // 문제종류
@@ -71,8 +71,13 @@ model Problem {
   validationIssues ValidationIssue[]
   workLogs         WorkLog[]
 
+  @@unique([subject, index])
   @@unique([examCode, problemNumber])
   @@index([subject, examYear])
+  @@index([subject, organization])
+  @@index([organization])
+  @@index([examCode])
+  @@index([problemType])
   @@index([problemPosted, solutionPosted])
   @@index([problemWorker])
   @@index([solutionWorker])

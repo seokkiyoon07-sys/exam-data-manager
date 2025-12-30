@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db"
 import { ProblemTable } from "@/components/problems/ProblemTable"
 import { ProblemFilters } from "@/components/problems/ProblemFilters"
 import { ExamList } from "@/components/problems/ExamList"
-import { SubjectFilter } from "@/components/problems/SubjectFilter"
+import { HierarchicalFilter } from "@/components/problems/HierarchicalFilter"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -19,6 +19,7 @@ type SearchParams = {
   subject?: string
   examYear?: string
   organization?: string
+  privateOrg?: string
   status?: string
   worker?: string
   hasError?: string
@@ -50,6 +51,23 @@ async function getProblems(searchParams: SearchParams) {
   }
   if (searchParams.organization) {
     where.organization = searchParams.organization
+  }
+  // 사설 업체 필터 (problemType에서 검색)
+  if (searchParams.privateOrg) {
+    const searchTermsMap: Record<string, string[]> = {
+      "더프": ["더프"],
+      "시대인재": ["시대인재", "서바"],
+      "강남대성": ["강남대성", "강대"],
+      "히든카이스": ["히든카이스"],
+      "양승진": ["양승진"],
+      "현우진킬링캠프": ["현우진", "킬링캠프"],
+      "한석원": ["한석원", "JMT", "jmt"],
+      "이해원": ["이해원"],
+    }
+    const terms = searchTermsMap[searchParams.privateOrg] || [searchParams.privateOrg]
+    where.OR = terms.map(term => ({
+      problemType: { contains: term }
+    }))
   }
   if (searchParams.status === "problem_pending") {
     where.problemPosted = false
@@ -145,6 +163,25 @@ async function getExamGroups(searchParams: SearchParams) {
     whereConditions.push(`p.organization = $${params.length + 1}`)
     params.push(searchParams.organization)
   }
+  // 사설 업체 필터 (problemType에서 검색)
+  if (searchParams.privateOrg) {
+    const searchTermsMap: Record<string, string[]> = {
+      "더프": ["더프"],
+      "시대인재": ["시대인재", "서바"],
+      "강남대성": ["강남대성", "강대"],
+      "히든카이스": ["히든카이스"],
+      "양승진": ["양승진"],
+      "현우진킬링캠프": ["현우진", "킬링캠프"],
+      "한석원": ["한석원", "JMT", "jmt"],
+      "이해원": ["이해원"],
+    }
+    const terms = searchTermsMap[searchParams.privateOrg] || [searchParams.privateOrg]
+    const orConditions = terms.map((term, i) => {
+      params.push(`%${term}%`)
+      return `p."problemType" ILIKE $${params.length}`
+    })
+    whereConditions.push(`(${orConditions.join(" OR ")})`)
+  }
 
   const whereClause = whereConditions.length > 0
     ? `WHERE ${whereConditions.join(" AND ")}`
@@ -193,61 +230,38 @@ async function getExamGroups(searchParams: SearchParams) {
   }
 }
 
-// 캐시된 과목 목록 (5분 캐시)
-const getSubjects = unstable_cache(
-  async () => {
-    const subjects = await prisma.problem.findMany({
-      select: { subject: true },
-      distinct: ["subject"],
-      orderBy: { subject: "asc" },
-    })
-    return subjects.map((s) => s.subject)
-  },
-  ["subjects-list"],
-  { revalidate: 300 }
-)
-
-// 캐시된 필터 옵션 (5분 캐시)
+// 캐시된 필터 옵션 (30분 캐시, Raw SQL로 최적화)
 const getFilterOptions = unstable_cache(
   async () => {
-    const [subjects, organizations, years, workers] = await Promise.all([
-      prisma.problem.findMany({
-        select: { subject: true },
-        distinct: ["subject"],
-        orderBy: { subject: "asc" },
-      }),
-      prisma.problem.findMany({
-        select: { organization: true },
-        distinct: ["organization"],
-        orderBy: { organization: "asc" },
-      }),
-      prisma.problem.findMany({
-        select: { examYear: true },
-        distinct: ["examYear"],
-        orderBy: { examYear: "desc" },
-      }),
-      prisma.problem.findMany({
-        select: { problemWorker: true, solutionWorker: true },
-        distinct: ["problemWorker", "solutionWorker"],
-      }),
+    // Raw SQL로 한번에 모든 distinct 값을 가져옴 (Prisma ORM보다 훨씬 빠름)
+    const [subjectsResult, orgsResult, yearsResult, workersResult] = await Promise.all([
+      prisma.$queryRaw<Array<{ subject: string }>>`
+        SELECT DISTINCT subject FROM "Problem" ORDER BY subject ASC
+      `,
+      prisma.$queryRaw<Array<{ organization: string }>>`
+        SELECT DISTINCT organization FROM "Problem" ORDER BY organization ASC
+      `,
+      prisma.$queryRaw<Array<{ examYear: number }>>`
+        SELECT DISTINCT "examYear" FROM "Problem" ORDER BY "examYear" DESC
+      `,
+      prisma.$queryRaw<Array<{ worker: string }>>`
+        SELECT DISTINCT worker FROM (
+          SELECT "problemWorker" as worker FROM "Problem" WHERE "problemWorker" IS NOT NULL
+          UNION
+          SELECT "solutionWorker" as worker FROM "Problem" WHERE "solutionWorker" IS NOT NULL
+        ) w ORDER BY worker ASC
+      `,
     ])
 
-    // 작업자 목록 추출
-    const workerSet = new Set<string>()
-    workers.forEach((w) => {
-      if (w.problemWorker) workerSet.add(w.problemWorker)
-      if (w.solutionWorker) workerSet.add(w.solutionWorker)
-    })
-
     return {
-      subjects: subjects.map((s) => s.subject),
-      organizations: organizations.map((o) => o.organization),
-      years: years.map((y) => y.examYear),
-      workers: Array.from(workerSet).sort(),
+      subjects: subjectsResult.map((s) => s.subject),
+      organizations: orgsResult.map((o) => o.organization),
+      years: yearsResult.map((y) => y.examYear),
+      workers: workersResult.map((w) => w.worker),
     }
   },
   ["filter-options"],
-  { revalidate: 300 }
+  { revalidate: 1800 } // 30분 캐시
 )
 
 function TableSkeleton() {
@@ -280,10 +294,13 @@ export default async function ProblemsPage({
   // 시험지코드가 있으면 index 뷰로 전환
   const effectiveView = params.examCode ? "index" : currentView
 
-  const [problemData, examData, subjects] = await Promise.all([
-    effectiveView === "index" ? getProblems(params) : null,
-    effectiveView === "exam" ? getExamGroups(params) : null,
-    getSubjects(),
+  // 과목이 선택되었을 때만 데이터 로드 (성능 최적화)
+  const hasSubjectFilter = !!params.subject
+
+  const [problemData, examData, filterOptions] = await Promise.all([
+    hasSubjectFilter && effectiveView === "index" ? getProblems(params) : null,
+    hasSubjectFilter && effectiveView === "exam" ? getExamGroups(params) : null,
+    getFilterOptions(),
   ])
 
   // 시험지코드로 필터링된 경우 해당 시험지 정보 가져오기
@@ -306,30 +323,37 @@ export default async function ProblemsPage({
         </p>
       </div>
 
-      {/* 과목 필터 - 탭 위에 배치 */}
-      <SubjectFilter subjects={subjects} currentSubject={params.subject} />
+      {/* 계층형 필터 - 과목 > 출제기관 > 사설업체 */}
+      <HierarchicalFilter
+        subjects={filterOptions.subjects}
+        organizations={filterOptions.organizations}
+        currentSubject={params.subject}
+        currentOrganization={params.organization}
+        currentPrivateOrg={params.privateOrg}
+      />
 
-      <Tabs value={effectiveView} className="w-full">
-        <TabsList className="mb-4">
-          <TabsTrigger value="exam" asChild>
-            <Link
-              href={`/problems?view=exam${params.subject ? `&subject=${encodeURIComponent(params.subject)}` : ""}`}
-              className="gap-2"
-            >
-              <FileText className="h-4 w-4" />
-              시험지별
-            </Link>
-          </TabsTrigger>
-          <TabsTrigger value="index" asChild>
-            <Link
-              href={`/problems?view=index${params.subject ? `&subject=${encodeURIComponent(params.subject)}` : ""}`}
-              className="gap-2"
-            >
-              <List className="h-4 w-4" />
-              전체 문항
-            </Link>
-          </TabsTrigger>
-        </TabsList>
+      {hasSubjectFilter && (
+        <Tabs value={effectiveView} className="w-full">
+          <TabsList className="mb-4">
+            <TabsTrigger value="exam" asChild>
+              <Link
+                href={`/problems?view=exam&subject=${encodeURIComponent(params.subject!)}${params.organization ? `&organization=${encodeURIComponent(params.organization)}` : ""}`}
+                className="gap-2"
+              >
+                <FileText className="h-4 w-4" />
+                시험지별
+              </Link>
+            </TabsTrigger>
+            <TabsTrigger value="index" asChild>
+              <Link
+                href={`/problems?view=index&subject=${encodeURIComponent(params.subject!)}${params.organization ? `&organization=${encodeURIComponent(params.organization)}` : ""}`}
+                className="gap-2"
+              >
+                <List className="h-4 w-4" />
+                전체 문항
+              </Link>
+            </TabsTrigger>
+          </TabsList>
 
         <TabsContent value="exam" className="mt-0">
           <Card>
@@ -367,7 +391,7 @@ export default async function ProblemsPage({
                         <span>{currentExam.examCode}</span>
                       </span>
                     ) : (
-                      "전체 문항 목록"
+                      "문항 목록"
                     )}
                   </CardTitle>
                   {currentExam && (
@@ -403,7 +427,8 @@ export default async function ProblemsPage({
             </CardContent>
           </Card>
         </TabsContent>
-      </Tabs>
+        </Tabs>
+      )}
     </div>
   )
 }

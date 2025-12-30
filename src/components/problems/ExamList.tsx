@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
@@ -9,9 +9,12 @@ import {
   CheckCircle,
   AlertCircle,
   Search,
+  Clock,
+  CheckCheck,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
@@ -41,10 +44,13 @@ interface ExamListProps {
   }
 }
 
+type StatusFilter = "all" | "completed" | "incomplete"
+
 export function ExamList({ exams, filters }: ExamListProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [searchTerm, setSearchTerm] = useState("")
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
 
   const currentSubject = searchParams.get("subject") || ""
   const currentYear = searchParams.get("examYear") || ""
@@ -61,8 +67,33 @@ export function ExamList({ exams, filters }: ExamListProps) {
     router.push(`/problems?${params.toString()}`)
   }
 
-  const filteredExams = exams.filter((exam) => {
-    if (searchTerm) {
+  // 상태별 필터링
+  const filteredExams = useMemo(() => {
+    return exams.filter((exam) => {
+      // 검색어 필터
+      if (searchTerm) {
+        const search = searchTerm.toLowerCase()
+        const matchesSearch =
+          exam.examCode.toLowerCase().includes(search) ||
+          exam.subject.toLowerCase().includes(search) ||
+          exam.organization.toLowerCase().includes(search) ||
+          (exam.problemType && exam.problemType.toLowerCase().includes(search))
+        if (!matchesSearch) return false
+      }
+
+      // 상태 필터
+      const isCompleted = exam.solutionPostedCount === exam.totalCount
+      if (statusFilter === "completed" && !isCompleted) return false
+      if (statusFilter === "incomplete" && isCompleted) return false
+
+      return true
+    })
+  }, [exams, searchTerm, statusFilter])
+
+  // 상태별 카운트
+  const statusCounts = useMemo(() => {
+    const searchFiltered = exams.filter((exam) => {
+      if (!searchTerm) return true
       const search = searchTerm.toLowerCase()
       return (
         exam.examCode.toLowerCase().includes(search) ||
@@ -70,12 +101,44 @@ export function ExamList({ exams, filters }: ExamListProps) {
         exam.organization.toLowerCase().includes(search) ||
         (exam.problemType && exam.problemType.toLowerCase().includes(search))
       )
+    })
+
+    return {
+      all: searchFiltered.length,
+      completed: searchFiltered.filter(e => e.solutionPostedCount === e.totalCount).length,
+      incomplete: searchFiltered.filter(e => e.solutionPostedCount < e.totalCount).length,
     }
-    return true
-  })
+  }, [exams, searchTerm])
 
   return (
     <div className="space-y-4">
+      {/* 상태 탭 */}
+      <Tabs value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+        <TabsList className="grid w-full grid-cols-3 max-w-md">
+          <TabsTrigger value="all" className="gap-2">
+            <FileText className="h-4 w-4" />
+            전체
+            <Badge variant="secondary" className="ml-1 text-xs">
+              {statusCounts.all}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="completed" className="gap-2">
+            <CheckCheck className="h-4 w-4" />
+            완료
+            <Badge variant="secondary" className="ml-1 text-xs bg-green-100 text-green-700">
+              {statusCounts.completed}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger value="incomplete" className="gap-2">
+            <Clock className="h-4 w-4" />
+            미완료
+            <Badge variant="secondary" className="ml-1 text-xs bg-orange-100 text-orange-700">
+              {statusCounts.incomplete}
+            </Badge>
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       {/* 필터 */}
       <div className="flex flex-wrap gap-3">
         <div className="relative w-64">
@@ -88,25 +151,6 @@ export function ExamList({ exams, filters }: ExamListProps) {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-
-        <Select
-          value={currentSubject || "all"}
-          onValueChange={(value) =>
-            updateFilter("subject", value === "all" ? null : value)
-          }
-        >
-          <SelectTrigger className="w-36">
-            <SelectValue placeholder="과목" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">전체 과목</SelectItem>
-            {filters.subjects.map((subject) => (
-              <SelectItem key={subject} value={subject}>
-                {subject}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
 
         <Select
           value={currentYear || "all"}
@@ -122,25 +166,6 @@ export function ExamList({ exams, filters }: ExamListProps) {
             {filters.years.map((year) => (
               <SelectItem key={year} value={String(year)}>
                 {year}년
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select
-          value={currentOrg || "all"}
-          onValueChange={(value) =>
-            updateFilter("organization", value === "all" ? null : value)
-          }
-        >
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="출제기관" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">전체 기관</SelectItem>
-            {filters.organizations.map((org) => (
-              <SelectItem key={org} value={org}>
-                {org}
               </SelectItem>
             ))}
           </SelectContent>

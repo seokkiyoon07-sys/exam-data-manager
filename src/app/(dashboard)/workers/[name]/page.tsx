@@ -29,78 +29,114 @@ async function getWorkerStats(workerName: string) {
     prisma.problem.count({ where: { solutionWorker: decodedName } }),
   ])
 
-  // 일별 통계 (최근 30일)
+  // 일별 통계 (최근 30일) - problemWorkDate가 있는 경우만
   const thirtyDaysAgo = new Date()
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
   thirtyDaysAgo.setHours(0, 0, 0, 0)
 
-  const dailyStats = await prisma.$queryRaw<Array<{
-    date: Date
-    problemCount: bigint
-    solutionCount: bigint
-  }>>`
-    SELECT
-      DATE("problemWorkDate") as date,
-      COUNT(CASE WHEN "problemWorker" = ${decodedName} AND "problemWorkDate" IS NOT NULL THEN 1 END) as "problemCount",
-      COUNT(CASE WHEN "solutionWorker" = ${decodedName} AND "solutionWorkDate" IS NOT NULL THEN 1 END) as "solutionCount"
-    FROM "Problem"
-    WHERE (
-      ("problemWorker" = ${decodedName} AND "problemWorkDate" >= ${thirtyDaysAgo})
-      OR ("solutionWorker" = ${decodedName} AND "solutionWorkDate" >= ${thirtyDaysAgo})
-    )
-    GROUP BY DATE("problemWorkDate")
-    ORDER BY date DESC
-  `
+  let dailyStats: Array<{ date: Date | null; problemCount: number; solutionCount: number }> = []
+  try {
+    const rawDaily = await prisma.$queryRaw<Array<{
+      work_date: Date | null
+      problem_count: bigint
+      solution_count: bigint
+    }>>`
+      SELECT
+        COALESCE(DATE("problemWorkDate"), DATE("solutionWorkDate")) as work_date,
+        SUM(CASE WHEN "problemWorker" = ${decodedName} THEN 1 ELSE 0 END)::bigint as problem_count,
+        SUM(CASE WHEN "solutionWorker" = ${decodedName} THEN 1 ELSE 0 END)::bigint as solution_count
+      FROM "Problem"
+      WHERE
+        ("problemWorker" = ${decodedName} OR "solutionWorker" = ${decodedName})
+        AND ("problemWorkDate" IS NOT NULL OR "solutionWorkDate" IS NOT NULL)
+        AND COALESCE("problemWorkDate", "solutionWorkDate") >= ${thirtyDaysAgo}
+      GROUP BY COALESCE(DATE("problemWorkDate"), DATE("solutionWorkDate"))
+      ORDER BY work_date DESC NULLS LAST
+    `
+    dailyStats = rawDaily.filter(d => d.work_date !== null).map(d => ({
+      date: d.work_date,
+      problemCount: Number(d.problem_count),
+      solutionCount: Number(d.solution_count),
+    }))
+  } catch (e) {
+    console.error('Daily stats query error:', e)
+  }
 
   // 주별 통계 (최근 12주)
   const twelveWeeksAgo = new Date()
   twelveWeeksAgo.setDate(twelveWeeksAgo.getDate() - 84)
   twelveWeeksAgo.setHours(0, 0, 0, 0)
 
-  const weeklyStats = await prisma.$queryRaw<Array<{
-    year: number
-    week: number
-    problemCount: bigint
-    solutionCount: bigint
-  }>>`
-    SELECT
-      EXTRACT(YEAR FROM "problemWorkDate")::int as year,
-      EXTRACT(WEEK FROM "problemWorkDate")::int as week,
-      COUNT(CASE WHEN "problemWorker" = ${decodedName} AND "problemWorkDate" IS NOT NULL THEN 1 END) as "problemCount",
-      COUNT(CASE WHEN "solutionWorker" = ${decodedName} AND "solutionWorkDate" IS NOT NULL THEN 1 END) as "solutionCount"
-    FROM "Problem"
-    WHERE (
-      ("problemWorker" = ${decodedName} AND "problemWorkDate" >= ${twelveWeeksAgo})
-      OR ("solutionWorker" = ${decodedName} AND "solutionWorkDate" >= ${twelveWeeksAgo})
-    )
-    GROUP BY EXTRACT(YEAR FROM "problemWorkDate"), EXTRACT(WEEK FROM "problemWorkDate")
-    ORDER BY year DESC, week DESC
-  `
+  let weeklyStats: Array<{ year: number | null; week: number | null; problemCount: number; solutionCount: number }> = []
+  try {
+    const rawWeekly = await prisma.$queryRaw<Array<{
+      year: number | null
+      week: number | null
+      problem_count: bigint
+      solution_count: bigint
+    }>>`
+      SELECT
+        EXTRACT(YEAR FROM COALESCE("problemWorkDate", "solutionWorkDate"))::int as year,
+        EXTRACT(WEEK FROM COALESCE("problemWorkDate", "solutionWorkDate"))::int as week,
+        SUM(CASE WHEN "problemWorker" = ${decodedName} THEN 1 ELSE 0 END)::bigint as problem_count,
+        SUM(CASE WHEN "solutionWorker" = ${decodedName} THEN 1 ELSE 0 END)::bigint as solution_count
+      FROM "Problem"
+      WHERE
+        ("problemWorker" = ${decodedName} OR "solutionWorker" = ${decodedName})
+        AND ("problemWorkDate" IS NOT NULL OR "solutionWorkDate" IS NOT NULL)
+        AND COALESCE("problemWorkDate", "solutionWorkDate") >= ${twelveWeeksAgo}
+      GROUP BY
+        EXTRACT(YEAR FROM COALESCE("problemWorkDate", "solutionWorkDate")),
+        EXTRACT(WEEK FROM COALESCE("problemWorkDate", "solutionWorkDate"))
+      ORDER BY year DESC NULLS LAST, week DESC NULLS LAST
+    `
+    weeklyStats = rawWeekly.filter(w => w.year !== null && w.week !== null).map(w => ({
+      year: w.year,
+      week: w.week,
+      problemCount: Number(w.problem_count),
+      solutionCount: Number(w.solution_count),
+    }))
+  } catch (e) {
+    console.error('Weekly stats query error:', e)
+  }
 
   // 월별 통계 (최근 12개월)
   const twelveMonthsAgo = new Date()
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12)
   twelveMonthsAgo.setHours(0, 0, 0, 0)
 
-  const monthlyStats = await prisma.$queryRaw<Array<{
-    year: number
-    month: number
-    problemCount: bigint
-    solutionCount: bigint
-  }>>`
-    SELECT
-      EXTRACT(YEAR FROM "problemWorkDate")::int as year,
-      EXTRACT(MONTH FROM "problemWorkDate")::int as month,
-      COUNT(CASE WHEN "problemWorker" = ${decodedName} AND "problemWorkDate" IS NOT NULL THEN 1 END) as "problemCount",
-      COUNT(CASE WHEN "solutionWorker" = ${decodedName} AND "solutionWorkDate" IS NOT NULL THEN 1 END) as "solutionCount"
-    FROM "Problem"
-    WHERE (
-      ("problemWorker" = ${decodedName} AND "problemWorkDate" >= ${twelveMonthsAgo})
-      OR ("solutionWorker" = ${decodedName} AND "solutionWorkDate" >= ${twelveMonthsAgo})
-    )
-    GROUP BY EXTRACT(YEAR FROM "problemWorkDate"), EXTRACT(MONTH FROM "problemWorkDate")
-    ORDER BY year DESC, month DESC
-  `
+  let monthlyStats: Array<{ year: number | null; month: number | null; problemCount: number; solutionCount: number }> = []
+  try {
+    const rawMonthly = await prisma.$queryRaw<Array<{
+      year: number | null
+      month: number | null
+      problem_count: bigint
+      solution_count: bigint
+    }>>`
+      SELECT
+        EXTRACT(YEAR FROM COALESCE("problemWorkDate", "solutionWorkDate"))::int as year,
+        EXTRACT(MONTH FROM COALESCE("problemWorkDate", "solutionWorkDate"))::int as month,
+        SUM(CASE WHEN "problemWorker" = ${decodedName} THEN 1 ELSE 0 END)::bigint as problem_count,
+        SUM(CASE WHEN "solutionWorker" = ${decodedName} THEN 1 ELSE 0 END)::bigint as solution_count
+      FROM "Problem"
+      WHERE
+        ("problemWorker" = ${decodedName} OR "solutionWorker" = ${decodedName})
+        AND ("problemWorkDate" IS NOT NULL OR "solutionWorkDate" IS NOT NULL)
+        AND COALESCE("problemWorkDate", "solutionWorkDate") >= ${twelveMonthsAgo}
+      GROUP BY
+        EXTRACT(YEAR FROM COALESCE("problemWorkDate", "solutionWorkDate")),
+        EXTRACT(MONTH FROM COALESCE("problemWorkDate", "solutionWorkDate"))
+      ORDER BY year DESC NULLS LAST, month DESC NULLS LAST
+    `
+    monthlyStats = rawMonthly.filter(m => m.year !== null && m.month !== null).map(m => ({
+      year: m.year,
+      month: m.month,
+      problemCount: Number(m.problem_count),
+      solutionCount: Number(m.solution_count),
+    }))
+  } catch (e) {
+    console.error('Monthly stats query error:', e)
+  }
 
   // 오류 건수
   const errorCount = await prisma.validationIssue.count({
@@ -125,23 +161,23 @@ async function getWorkerStats(workerName: string) {
     },
     dailyStats: dailyStats.map(d => ({
       date: d.date,
-      problemCount: Number(d.problemCount),
-      solutionCount: Number(d.solutionCount),
-      total: Number(d.problemCount) + Number(d.solutionCount),
+      problemCount: d.problemCount,
+      solutionCount: d.solutionCount,
+      total: d.problemCount + d.solutionCount,
     })),
     weeklyStats: weeklyStats.map(w => ({
       year: w.year,
       week: w.week,
-      problemCount: Number(w.problemCount),
-      solutionCount: Number(w.solutionCount),
-      total: Number(w.problemCount) + Number(w.solutionCount),
+      problemCount: w.problemCount,
+      solutionCount: w.solutionCount,
+      total: w.problemCount + w.solutionCount,
     })),
     monthlyStats: monthlyStats.map(m => ({
       year: m.year,
       month: m.month,
-      problemCount: Number(m.problemCount),
-      solutionCount: Number(m.solutionCount),
-      total: Number(m.problemCount) + Number(m.solutionCount),
+      problemCount: m.problemCount,
+      solutionCount: m.solutionCount,
+      total: m.problemCount + m.solutionCount,
     })),
   }
 }
