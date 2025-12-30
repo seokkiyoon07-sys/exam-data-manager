@@ -8,12 +8,13 @@ import { RecentActivity } from "@/components/dashboard/RecentActivity"
 import { prisma } from "@/lib/db"
 
 async function getDashboardData() {
+  // 단일 쿼리로 과목별 진행률 계산 (N+1 쿼리 방지)
   const [
     totalProblems,
     problemPostedCount,
     solutionPostedCount,
     validationIssueCount,
-    subjectProgress,
+    subjectProgressData,
     topIssues,
     recentLogs,
   ] = await Promise.all([
@@ -21,11 +22,22 @@ async function getDashboardData() {
     prisma.problem.count({ where: { problemPosted: true } }),
     prisma.problem.count({ where: { solutionPosted: true } }),
     prisma.validationIssue.count({ where: { resolved: false } }),
-    prisma.problem.groupBy({
-      by: ["subject"],
-      _count: { id: true },
-      orderBy: { subject: "asc" },
-    }),
+    // 단일 raw 쿼리로 과목별 통계 한번에 조회
+    prisma.$queryRaw<Array<{
+      subject: string
+      total: bigint
+      problemPosted: bigint
+      solutionPosted: bigint
+    }>>`
+      SELECT
+        subject,
+        COUNT(*) as total,
+        SUM(CASE WHEN "problemPosted" = true THEN 1 ELSE 0 END) as "problemPosted",
+        SUM(CASE WHEN "solutionPosted" = true THEN 1 ELSE 0 END) as "solutionPosted"
+      FROM "Problem"
+      GROUP BY subject
+      ORDER BY subject ASC
+    `,
     prisma.validationIssue.groupBy({
       by: ["ruleCode", "severity", "message"],
       where: { resolved: false },
@@ -40,24 +52,6 @@ async function getDashboardData() {
     }),
   ])
 
-  // 과목별 진행률 계산
-  const subjectProgressData = await Promise.all(
-    subjectProgress.map(async (s) => {
-      const problemPosted = await prisma.problem.count({
-        where: { subject: s.subject, problemPosted: true },
-      })
-      const solutionPosted = await prisma.problem.count({
-        where: { subject: s.subject, solutionPosted: true },
-      })
-      return {
-        subject: s.subject,
-        total: s._count.id,
-        problemPosted,
-        solutionPosted,
-      }
-    })
-  )
-
   return {
     stats: {
       total: totalProblems,
@@ -65,7 +59,12 @@ async function getDashboardData() {
       solutionPosted: solutionPostedCount,
       issues: validationIssueCount,
     },
-    subjectProgress: subjectProgressData,
+    subjectProgress: subjectProgressData.map(s => ({
+      subject: s.subject,
+      total: Number(s.total),
+      problemPosted: Number(s.problemPosted),
+      solutionPosted: Number(s.solutionPosted),
+    })),
     topIssues: topIssues.map((i) => ({
       ruleCode: i.ruleCode,
       message: i.message,
