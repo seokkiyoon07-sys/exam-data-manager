@@ -238,16 +238,19 @@ export default async function WorkersPage() {
               </TableHeader>
               <TableBody>
                 {data.workers.map((worker) => (
-                  <TableRow key={worker.name}>
+                  <TableRow key={worker.name} className="cursor-pointer hover:bg-slate-50">
                     <TableCell>
-                      <div className="flex items-center gap-3">
+                      <a
+                        href={`/workers/${encodeURIComponent(worker.name)}`}
+                        className="flex items-center gap-3"
+                      >
                         <Avatar className="h-8 w-8">
                           <AvatarFallback className="text-xs">
                             {worker.name.slice(0, 2).toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
-                        <span className="font-medium">{worker.name}</span>
-                      </div>
+                        <span className="font-medium hover:underline">{worker.name}</span>
+                      </a>
                     </TableCell>
                     <TableCell className="text-right">
                       {worker.problemCount.toLocaleString()}

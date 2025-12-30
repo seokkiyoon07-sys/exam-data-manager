@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { Suspense } from "react"
+import { unstable_cache } from "next/cache"
 import { prisma } from "@/lib/db"
 import { ProblemTable } from "@/components/problems/ProblemTable"
 import { ProblemFilters } from "@/components/problems/ProblemFilters"
@@ -192,52 +193,62 @@ async function getExamGroups(searchParams: SearchParams) {
   }
 }
 
-async function getSubjects() {
-  const subjects = await prisma.problem.findMany({
-    select: { subject: true },
-    distinct: ["subject"],
-    orderBy: { subject: "asc" },
-  })
-  return subjects.map((s) => s.subject)
-}
-
-async function getFilterOptions() {
-  const [subjects, organizations, years, workers] = await Promise.all([
-    prisma.problem.findMany({
+// 캐시된 과목 목록 (5분 캐시)
+const getSubjects = unstable_cache(
+  async () => {
+    const subjects = await prisma.problem.findMany({
       select: { subject: true },
       distinct: ["subject"],
       orderBy: { subject: "asc" },
-    }),
-    prisma.problem.findMany({
-      select: { organization: true },
-      distinct: ["organization"],
-      orderBy: { organization: "asc" },
-    }),
-    prisma.problem.findMany({
-      select: { examYear: true },
-      distinct: ["examYear"],
-      orderBy: { examYear: "desc" },
-    }),
-    prisma.problem.findMany({
-      select: { problemWorker: true, solutionWorker: true },
-      distinct: ["problemWorker", "solutionWorker"],
-    }),
-  ])
+    })
+    return subjects.map((s) => s.subject)
+  },
+  ["subjects-list"],
+  { revalidate: 300 }
+)
 
-  // 작업자 목록 추출
-  const workerSet = new Set<string>()
-  workers.forEach((w) => {
-    if (w.problemWorker) workerSet.add(w.problemWorker)
-    if (w.solutionWorker) workerSet.add(w.solutionWorker)
-  })
+// 캐시된 필터 옵션 (5분 캐시)
+const getFilterOptions = unstable_cache(
+  async () => {
+    const [subjects, organizations, years, workers] = await Promise.all([
+      prisma.problem.findMany({
+        select: { subject: true },
+        distinct: ["subject"],
+        orderBy: { subject: "asc" },
+      }),
+      prisma.problem.findMany({
+        select: { organization: true },
+        distinct: ["organization"],
+        orderBy: { organization: "asc" },
+      }),
+      prisma.problem.findMany({
+        select: { examYear: true },
+        distinct: ["examYear"],
+        orderBy: { examYear: "desc" },
+      }),
+      prisma.problem.findMany({
+        select: { problemWorker: true, solutionWorker: true },
+        distinct: ["problemWorker", "solutionWorker"],
+      }),
+    ])
 
-  return {
-    subjects: subjects.map((s) => s.subject),
-    organizations: organizations.map((o) => o.organization),
-    years: years.map((y) => y.examYear),
-    workers: Array.from(workerSet).sort(),
-  }
-}
+    // 작업자 목록 추출
+    const workerSet = new Set<string>()
+    workers.forEach((w) => {
+      if (w.problemWorker) workerSet.add(w.problemWorker)
+      if (w.solutionWorker) workerSet.add(w.solutionWorker)
+    })
+
+    return {
+      subjects: subjects.map((s) => s.subject),
+      organizations: organizations.map((o) => o.organization),
+      years: years.map((y) => y.examYear),
+      workers: Array.from(workerSet).sort(),
+    }
+  },
+  ["filter-options"],
+  { revalidate: 300 }
+)
 
 function TableSkeleton() {
   return (

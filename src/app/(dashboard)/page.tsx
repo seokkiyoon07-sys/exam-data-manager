@@ -1,13 +1,15 @@
 export const dynamic = 'force-dynamic'
 
 import { FileText, CheckCircle, AlertTriangle, TrendingUp } from "lucide-react"
+import { unstable_cache } from "next/cache"
 import { StatsCard } from "@/components/dashboard/StatsCard"
 import { ProgressChart } from "@/components/dashboard/ProgressChart"
 import { ValidationSummary } from "@/components/dashboard/ValidationSummary"
 import { RecentActivity } from "@/components/dashboard/RecentActivity"
 import { prisma } from "@/lib/db"
 
-async function getDashboardData() {
+// 대시보드 데이터 캐싱 (1분 캐시)
+const getDashboardData = unstable_cache(async () => {
   // 단일 쿼리로 과목별 진행률 계산 (N+1 쿼리 방지)
   const [
     totalProblems,
@@ -80,7 +82,7 @@ async function getDashboardData() {
       createdAt: log.createdAt,
     })),
   }
-}
+}, ["dashboard-data"], { revalidate: 60 })
 
 export default async function DashboardPage() {
   const data = await getDashboardData()
