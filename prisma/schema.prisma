@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 사용자 (작업자 + 관리자)
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(WORKER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workLogs WorkLog[]
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  WORKER
+}
+
+// 문항 (핵심 테이블)
+model Problem {
+  id    String @id @default(cuid())
+  index Int    @unique // 원본 Index
+
+  // 식별 정보
+  problemType  String? // 문제종류
+  examCode     String? // 시험지코드
+  organization String // 출제기관
+  subject      String // 과목
+  subCategory  String? // 소분류1
+  examYear     Int // 시행년도
+  problemNumber Int // 문항번호
+
+  // 문제 정보
+  questionType QuestionType @default(MULTIPLE) // 객관식/주관식
+  answer       String? // 정답
+  difficulty   String? // 난이도
+  score        Float? // 배점
+  correctRate  Float? // 정답률
+
+  // 선택비율 (객관식)
+  choiceRate1 Float? // 1번 선택비율
+  choiceRate2 Float? // 2번 선택비율
+  choiceRate3 Float? // 3번 선택비율
+  choiceRate4 Float? // 4번 선택비율
+  choiceRate5 Float? // 5번 선택비율
+
+  // 문제게시 작업
+  problemPosted   Boolean   @default(false) // 문제게시YN
+  problemWorker   String? // 문제게시 작업자
+  problemWorkDate DateTime? // 문제게시 작업일
+
+  // 해설게시 작업
+  solutionPosted   Boolean   @default(false) // 해설게시YN
+  solutionWorker   String? // 해설게시 작업자
+  solutionWorkDate DateTime? // 해설게시 작업일
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  validationIssues ValidationIssue[]
+  workLogs         WorkLog[]
+
+  @@unique([examCode, problemNumber])
+  @@index([subject, examYear])
+  @@index([problemPosted, solutionPosted])
+  @@index([problemWorker])
+  @@index([solutionWorker])
+}
+
+enum QuestionType {
+  MULTIPLE // 객관식
+  SUBJECTIVE // 주관식
+}
+
+// 검수 이슈
+model ValidationIssue {
+  id        String   @id @default(cuid())
+  problemId String
+  problem   Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  ruleCode   String // 규칙 코드 (예: MISSING_ANSWER)
+  severity   Severity @default(ERROR) // 심각도
+  field      String? // 문제 필드
+  message    String // 오류 메시지
+  resolved   Boolean  @default(false)
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([problemId])
+  @@index([ruleCode])
+  @@index([resolved])
+}
+
+enum Severity {
+  ERROR
+  WARNING
+  INFO
+}
+
+// 작업 로그
+model WorkLog {
+  id        String  @id @default(cuid())
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id])
+
+  action  String // 작업 유형 (CREATE, UPDATE, VALIDATE 등)
+  changes Json? // 변경 내역
+
+  createdAt DateTime @default(now())
+
+  @@index([problemId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// 파일 업로드 이력
+model UploadHistory {
+  id           String       @id @default(cuid())
+  fileName     String
+  fileSize     Int
+  totalRows    Int
+  successRows  Int
+  failedRows   Int
+  status       UploadStatus @default(PROCESSING)
+  errorMessage String?
+  uploadedBy   String
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+}
+
+enum UploadStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
