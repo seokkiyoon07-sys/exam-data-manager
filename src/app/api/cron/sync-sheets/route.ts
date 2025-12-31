@@ -6,11 +6,8 @@ import { processProblemBatch } from "@/lib/ingestion-service"
 import { ParsedProblem } from "@/lib/file-parser"
 import { prisma } from "@/lib/db"
 
-// Edge Runtime에서는 'encoding' 패키지가 필요할 수 있으나, Next.js API Routes (Node.js)에서는 TextEncoder가 글로벌로 존재함.
-// 만약 에러 발생 시 polyfill 고려. Node.js 18+ 에서는 globalThis.TextEncoder 사용 가능.
-
 export const dynamic = 'force-dynamic' // 정적 최적화 방지
-export const maxDuration = 300 // 5분 타임아웃 (Vercel Pro/Enterprise 기준, Hobby는 10초/60초 제한 주의)
+export const maxDuration = 300 // 5분 타임아웃
 
 export async function GET(request: NextRequest) {
     const encoder = new TextEncoder()
@@ -35,6 +32,7 @@ export async function GET(request: NextRequest) {
             let totalProcessed = 0
             let totalSuccess = 0
             let totalFailed = 0
+            let totalSkipped = 0
             const details: string[] = []
             const summaryParts: string[] = []
 
@@ -55,14 +53,15 @@ export async function GET(request: NextRequest) {
                             if (config.includeTabs && !config.includeTabs.includes(sheet.title)) continue
                             if (config.excludeTabs && config.excludeTabs.includes(sheet.title)) continue
 
-                            // 탭 이름 매핑 로직 (Fallback 이전에 미리 적용)
+                            // 탭 이름 매핑 로직
                             const SUBJECT_MAPPING: Record<string, string> = {
                                 "Physics_labeling": "과탐 - 물리",
                                 "EAS_Labeling1": "과탐 - 지구과학"
                             }
-                            const mappedTabName = SUBJECT_MAPPING[sheet.title] || sheet.title
+                            const forceSubject = SUBJECT_MAPPING[sheet.title];
+                            const displayTabName = forceSubject || sheet.title
 
-                            send({ type: 'progress', message: `[${config.label}] ${mappedTabName} 처리 중...` })
+                            send({ type: 'progress', message: `[${config.label}] ${displayTabName} 처리 중...` })
 
                             const header = sheet.values[0]
                             const dataRows = sheet.values.slice(1)
@@ -75,9 +74,11 @@ export async function GET(request: NextRequest) {
                                         obj[colName] = rowArr[idx] || ""
                                     }
                                 })
-                                // 과목이 비어있으면 매핑된 탭 이름으로 설정
-                                if (!obj["과목"]) {
-                                    obj["과목"] = mappedTabName
+
+                                if (forceSubject) {
+                                    obj["과목"] = forceSubject
+                                } else if (!obj["과목"]) {
+                                    obj["과목"] = displayTabName
                                 }
                                 return obj
                             })
@@ -96,16 +97,16 @@ export async function GET(request: NextRequest) {
                             })
 
                             // DB 저장 (Ingestion Service 재사용)
-                            // processProblemBatch는 내부적으로 Promise.all 등으로 병렬 처리됨
                             const batchResult = await processProblemBatch(parsedBatch)
 
                             const sheetResult = {
-                                tab: sheet.title, // 원본 탭 이름 (로깅용)
+                                tab: sheet.title,
                                 status: 'success',
-                                total: dataRows.length, // 원본 행 수
+                                total: dataRows.length,
                                 totalRows: parsedBatch.length, // 파싱 성공 수 (실제 처리 대상)
                                 success: batchResult.successCount,
-                                failed: batchResult.failedCount + parseErrors.length, // 파싱 에러 포함
+                                skipped: batchResult.skippedCount,
+                                failed: batchResult.failedCount + parseErrors.length,
                                 error: parseErrors.length > 0 ? `${parseErrors.length} parsing errors` : null
                             }
                             results[key].push(sheetResult)
@@ -113,16 +114,23 @@ export async function GET(request: NextRequest) {
                             // 통계 누적
                             totalProcessed += sheetResult.totalRows
                             totalSuccess += sheetResult.success
+                            totalSkipped += sheetResult.skipped
                             totalFailed += sheetResult.failed
 
-                            // 요약 메시지 생성
-                            let sheetSummary = `${mappedTabName}: ${sheetResult.success}건`
+                            // 요약 메시지 생성 (매핑된 이름 사용)
+                            let sheetSummary = `${displayTabName}: 성공 ${sheetResult.success}`
+                            if (sheetResult.skipped > 0) {
+                                sheetSummary += `, 건너뜀 ${sheetResult.skipped}`
+                            }
                             if (sheetResult.failed > 0) {
-                                sheetSummary += `(실패 ${sheetResult.failed})`
+                                sheetSummary += `, 실패 ${sheetResult.failed}`
                             }
                             summaryParts.push(sheetSummary)
 
-                            send({ type: 'log', message: `  - ${mappedTabName}: 성공 ${sheetResult.success}, 실패 ${sheetResult.failed}` })
+                            send({
+                                type: 'log',
+                                message: `  - ${displayTabName}: 성공 ${sheetResult.success}, 건너뜀 ${sheetResult.skipped}, 실패 ${sheetResult.failed}`
+                            })
                         }
                     } catch (sheetError) {
                         const errorMsg = `${key} 처리 중 오류: ${sheetError instanceof Error ? sheetError.message : "Unknown"}`
@@ -149,7 +157,8 @@ export async function GET(request: NextRequest) {
                             totalRows: totalProcessed,
                             successRows: totalSuccess,
                             failedRows: totalFailed,
-                            status: details.length > 0 ? "FAILED" : "COMPLETED",
+                            // 실패가 0건이면 COMPLETED (건너뜀은 실패가 아님)
+                            status: totalFailed > 0 ? "FAILED" : "COMPLETED",
                             errorMessage: detailMessage || null,
                             uploadedBy: "SYSTEM",
                             type: "GOOGLE_SHEET",
@@ -164,7 +173,7 @@ export async function GET(request: NextRequest) {
                 send({
                     type: 'complete',
                     processedSheets: totalProcessed, // 호환성 유지
-                    message: `동기화 완료: 총 ${totalSuccess}건 성공`
+                    message: `동기화 완료: 성공 ${totalSuccess}, 건너뜀 ${totalSkipped}, 실패 ${totalFailed}`
                 })
                 controller.close()
 

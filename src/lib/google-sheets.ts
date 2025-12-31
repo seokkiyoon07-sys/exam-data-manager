@@ -103,11 +103,15 @@ export function parseRow(rowObj: Record<string, string>, rowIndex: number): Pars
 
     // 숫자로 변환 (실패 시 0 or undefined)
     const num = (val: string) => {
-        const n = Number(clean(val));
+        // %, 콤마 제거
+        const s = clean(val).replace(/[%,\s]/g, "");
+        const n = Number(s);
         return isNaN(n) ? 0 : n;
     }
     const numOrUndefined = (val: string) => {
-        const n = Number(clean(val));
+        const s = clean(val).replace(/[%,\s]/g, "");
+        if (!s) return undefined; // 빈 문자열인 경우
+        const n = Number(s);
         return isNaN(n) ? undefined : n;
     }
 
