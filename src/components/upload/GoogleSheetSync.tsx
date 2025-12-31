@@ -3,44 +3,75 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { RefreshCw, CheckCircle, XCircle, Loader2 } from "lucide-react"
+import { RefreshCw, CheckCircle, XCircle } from "lucide-react"
 
 export function GoogleSheetSync({ onSyncComplete }: { onSyncComplete: () => void }) {
     const [isSyncing, setIsSyncing] = useState(false)
     const [result, setResult] = useState<{ success: boolean; message: string } | null>(null)
+    const [logs, setLogs] = useState<string[]>([])
+    const [progressMessage, setProgressMessage] = useState<string>("")
 
     const handleSync = async () => {
         if (!confirm("모든 구글 시트 데이터를 동기화하시겠습니까?\n이 작업은 시간이 소요될 수 있습니다.")) return
 
         setIsSyncing(true)
         setResult(null)
+        setLogs([])
+        setProgressMessage("연결 중...")
 
         try {
-            // Using GET as the route is defined as a Cron job (GET)
-            // Adding ?test=true to bypass Cron Secret check for manual trigger from dashboard
             const response = await fetch("/api/cron/sync-sheets?test=true", {
                 method: "GET",
             })
 
-            let data;
-            const text = await response.text();
+            if (!response.body) throw new Error("ReadableStream not supported")
 
-            try {
-                data = text ? JSON.parse(text) : {};
-            } catch (e) {
-                console.error("Failed to parse JSON:", text);
-                throw new Error("서버 응답이 올바르지 않습니다.");
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ""
+
+            // 스트림 읽기 루프
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                const chunk = decoder.decode(value, { stream: true })
+                buffer += chunk
+
+                // 줄바꿈으로 메시지 분리 (NDJSON)
+                const lines = buffer.split("\n\n")
+                buffer = lines.pop() || "" // 마지막 불완전한 조각은 남김
+
+                for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                        try {
+                            const data = JSON.parse(line.slice(6)) // "data: " 제거
+
+                            switch (data.type) {
+                                case 'start':
+                                case 'log':
+                                    setLogs(prev => [...prev, data.message])
+                                    break
+                                case 'progress':
+                                    setProgressMessage(data.message)
+                                    break
+                                case 'complete':
+                                    setResult({
+                                        success: true,
+                                        message: data.message
+                                    })
+                                    onSyncComplete()
+                                    break
+                                case 'error':
+                                    throw new Error(data.message)
+                            }
+                        } catch (e) {
+                            console.error("Stream parse error:", e)
+                        }
+                    }
+                }
             }
 
-            if (!response.ok) {
-                throw new Error(data.error || `동기화 실패 (${response.status})`)
-            }
-
-            setResult({
-                success: true,
-                message: `동기화 완료: ${data.processedSheets || 0}개 시트 처리됨`
-            })
-            onSyncComplete() // Refresh history
         } catch (error) {
             setResult({
                 success: false,
@@ -48,6 +79,7 @@ export function GoogleSheetSync({ onSyncComplete }: { onSyncComplete: () => void
             })
         } finally {
             setIsSyncing(false)
+            setProgressMessage("")
         }
     }
 
@@ -65,28 +97,40 @@ export function GoogleSheetSync({ onSyncComplete }: { onSyncComplete: () => void
                         <RefreshCw className={`h-8 w-8 text-green-600 ${isSyncing ? "animate-spin" : ""}`} />
                     </div>
                     <h3 className="font-semibold text-slate-900 mb-1">데이터 동기화</h3>
-                    <p className="text-sm text-slate-500 mb-6 text-center max-w-sm">
-                        마지막 동기화 이후 변경된 내용을 업데이트합니다.<br />
-                        (새로운 문제 추가, 수정된 내용 반영)
-                    </p>
 
-                    <Button
-                        onClick={handleSync}
-                        disabled={isSyncing}
-                        className="w-full max-w-xs h-11 bg-green-600 hover:bg-green-700 text-white gap-2"
-                    >
-                        {isSyncing ? (
-                            <>
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                                동기화 중...
-                            </>
-                        ) : (
-                            <>
-                                <RefreshCw className="h-4 w-4" />
-                                지금 동기화 시작
-                            </>
-                        )}
-                    </Button>
+                    {isSyncing ? (
+                        <div className="w-full max-w-sm space-y-2 text-center">
+                            <p className="text-sm font-medium text-slate-700 animate-pulse">
+                                {progressMessage || "동기화 진행 중..."}
+                            </p>
+                            {/* 로그 뷰어 */}
+                            <div className="h-48 w-full bg-slate-900 rounded p-3 text-left overflow-y-auto font-mono text-xs shadow-inner custom-scrollbar">
+                                {logs.map((log, i) => (
+                                    <div key={i} className="text-green-400 border-l-2 border-green-700 pl-2 mb-1 opacity-90 break-all whitespace-pre-wrap">
+                                        {log}
+                                        {i === logs.length - 1 && <span className="animate-pulse">_</span>}
+                                    </div>
+                                ))}
+                                <div ref={(el) => el?.scrollIntoView({ behavior: "smooth" })} />
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="text-sm text-slate-500 mb-6 text-center max-w-sm">
+                            마지막 동기화 이후 변경된 내용을 업데이트합니다.<br />
+                            (새로운 문제 추가, 수정된 내용 반영)
+                        </p>
+                    )}
+
+                    {!isSyncing && (
+                        <Button
+                            onClick={handleSync}
+                            disabled={isSyncing}
+                            className="w-full max-w-xs h-11 bg-green-600 hover:bg-green-700 text-white gap-2 mt-4"
+                        >
+                            <RefreshCw className="h-4 w-4" />
+                            지금 동기화 시작
+                        </Button>
+                    )}
                 </div>
 
                 {result && (
