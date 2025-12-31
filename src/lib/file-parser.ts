@@ -124,7 +124,7 @@ function normalizeOrganization(value: string): string {
       if (normalized.includes("ebs")) return "EBS"
     }
   }
-  return "사설"
+  return value.trim()
 }
 
 // 사설 출제기관 코드 매핑
@@ -137,28 +137,92 @@ const PRIVATE_ORG_CODES: Record<string, string> = {
   "메가스터디": "MEGA",
 }
 
+// 과목명 정규화
+function normalizeSubject(rawSubject: string, subCategory?: string): string {
+  if (!rawSubject) return "미분류"
+  let subject = rawSubject.trim()
+  const sub = subCategory ? subCategory.trim().toLowerCase() : ""
+
+  // 1. 과학탐구 (Science)
+  // 물리학
+  if (subject.includes("Physics") || subject === "물리" || subject === "과학") {
+    // subCategory나 subject에서 2/II 감지
+    if (subject.includes("2") || subject.includes("II") || sub.includes("2") || sub.includes("ii")) return "물리학II"
+    return "물리학I"
+  }
+  // 화학
+  if (subject.includes("Chem") || subject === "화학") {
+    if (subject.includes("2") || subject.includes("II") || sub.includes("2") || sub.includes("ii")) return "화학II"
+    return "화학I"
+  }
+  // 생명과학
+  if (subject.includes("bio") || subject.includes("Bio") || subject === "생명" || subject === "생물" || subject === "생명과학") {
+    if (subject.includes("2") || subject.includes("II") || sub.includes("2") || sub.includes("ii")) return "생명과학II"
+    return "생명과학I"
+  }
+  // 지구과학
+  if (subject.includes("EAS") || subject === "지구" || subject === "지구과학") {
+    if (subject.includes("2") || subject.includes("II") || sub.includes("2") || sub.includes("ii")) return "지구과학II"
+    return "지구과학I"
+  }
+
+  // 2. 사회탐구 (Social)
+  if (subject === "윤리") return "생활과 윤리" // (가정: 대부분 생윤)
+  if (subject === "윤사" || subject === "윤리와사상") return "윤리와 사상"
+  if (subject === "생윤" || subject === "생활과윤리") return "생활과 윤리"
+  if (subject === "한지" || subject === "한국지리") return "한국지리"
+  if (subject === "세지" || subject === "세계지리") return "세계지리"
+  if (subject === "동사" || subject === "동아시아사") return "동아시아사"
+  if (subject === "세계사") return "세계사"
+  if (subject === "경제") return "경제"
+  if (subject === "정법" || subject === "정치" || subject === "정치와법" || subject.includes("정치")) return "정치와 법"
+  if (subject === "사문" || subject === "사회문화") return "사회·문화"
+
+  // 3. 국어/수학/영어
+  if (subject === "국어B형" || subject === "국어A형") return "국어"
+
+  return subject
+}
+
 // 과목 코드 매핑
 function getSubjectCode(subject: string, subCategory?: string): string {
   const sub = subCategory?.toLowerCase() || ""
 
+  // 정규화된 과목명 기준으로 코드 생성
   if (subject === "국어") {
     if (sub.includes("화법") || sub.includes("작문")) return "KOR_SPW"
     if (sub.includes("언어") || sub.includes("매체")) return "KOR_LNM"
     return "KOR"
   }
   if (subject === "수학") {
+    // ... 기존 로직 유지
     if (sub.includes("확률") || sub.includes("통계")) return "MATH_PS"
     if (sub.includes("미적분")) return "MATH_CAL"
     if (sub.includes("기하")) return "MATH_GEO"
-    if (sub.includes("가형")) return "MATH_GA"
-    if (sub.includes("나형")) return "MATH_NA"
     return "MATH"
   }
   if (subject === "영어") return "ENG"
-  if (subject.includes("물리")) return "SCI_PHY"
-  if (subject.includes("화학")) return "SCI_CHM"
-  if (subject.includes("생명") || subject.includes("생물")) return "SCI_BIO"
-  if (subject.includes("지구과학")) return "SCI_EAS"
+
+  // 과탐
+  if (subject === "물리학I") return "PHY1"
+  if (subject === "물리학II") return "PHY2"
+  if (subject === "화학I") return "CHM1"
+  if (subject === "화학II") return "CHM2"
+  if (subject === "생명과학I") return "BIO1"
+  if (subject === "생명과학II") return "BIO2"
+  if (subject === "지구과학I") return "EAS1"
+  if (subject === "지구과학II") return "EAS2"
+
+  // 사탐
+  if (subject === "생활과 윤리") return "ETH_L"
+  if (subject === "윤리와 사상") return "ETH_T"
+  if (subject === "한국지리") return "GEO_K"
+  if (subject === "세계지리") return "GEO_W"
+  if (subject === "동아시아사") return "HIS_E"
+  if (subject === "세계사") return "HIS_W"
+  if (subject === "경제") return "ECO"
+  if (subject === "정치와 법") return "POL"
+  if (subject === "사회·문화") return "SOC"
 
   return subject.substring(0, 3).toUpperCase()
 }
@@ -229,6 +293,78 @@ function generateExamCode(
   return `${dateCode}_${subjectCode}_${orgCode}_${grade}`
 }
 
+export function parseProblemRow(row: Record<string, unknown>, rowNumber: number): ParsedProblem {
+  // Worker와 Work_Date 처리 (한글 헤더 우선 지원)
+  // 문제게시 작업자
+  const rawProblemWorker = (row["작업자"] || row["Worker"]) as string | undefined
+  // 해설게시 작업자 (작업자1 or Worker_1)
+  const rawSolutionWorker = (row["작업자1"] || row["Worker_1"]) as string | undefined
+
+  const problemWorker = rawProblemWorker && rawProblemWorker.trim() ? rawProblemWorker.trim() : undefined
+  const solutionWorker = rawSolutionWorker && rawSolutionWorker.trim() ? rawSolutionWorker.trim() : undefined
+
+  // 날짜 파싱
+  const problemWorkDate = parseDate(row["작업일"] || row["Work_Date"])
+  const solutionWorkDate = parseDate(row["작업일1"] || row["Work_Date_1"])
+
+  // Index (대소문자 허용)
+  const indexVal = parseNumber(row["Index"]) ?? parseNumber(row["index"])
+  const examYear = parseNumber(row["시행년도"])
+  const problemNumber = parseNumber(row["문항번호"])
+  const rawOrganization = row["출제기관"] as string
+  const organization = rawOrganization ? normalizeOrganization(rawOrganization) : ""
+  const subject = row["과목"] as string
+
+  // Index는 필수 (없으면 에러 throw)
+  if (indexVal === undefined) {
+    throw new Error("Index가 없습니다.")
+  }
+
+  // 나머지 필드는 기본값으로 저장
+  const finalOrganization = organization || "미분류"
+  // 과목 정규화 적용
+  // subCategory는 위에서 이미 선언된(row["소분류1"]) 사용
+  const subCategory = row["소분류1"] as string || undefined
+  const finalSubject = normalizeSubject(subject, subCategory)
+
+  const finalExamYear = examYear ?? new Date().getFullYear()
+  const finalProblemNumber = problemNumber ?? 0
+  const problemType = row["문제종류"] as string || ""
+
+  // 시험지코드 자동 생성을 위해 subCategory 재사용
+  let examCode = row["시험지코드"] as string || ""
+  if (!examCode && problemType && rawOrganization && finalExamYear) {
+    examCode = generateExamCode(problemType, finalSubject, rawOrganization, finalExamYear, subCategory)
+  }
+
+  return {
+    index: indexVal,
+    problemType: problemType || undefined,
+    examCode: examCode || undefined,
+    organization: finalOrganization,
+    subject: finalSubject,
+    subCategory,
+    examYear: finalExamYear,
+    problemNumber: finalProblemNumber,
+    questionType: parseQuestionType(row["객관식주관식"]),
+    answer: row["정답"] ? String(row["정답"]) : undefined,
+    difficulty: row["난이도"] as string || undefined,
+    score: parseNumber(row["배점"]),
+    correctRate: parsePercent(row["정답률"]),
+    choiceRate1: parsePercent(row["1번 선택비율"]),
+    choiceRate2: parsePercent(row["2번 선택비율"]),
+    choiceRate3: parsePercent(row["3번 선택비율"]),
+    choiceRate4: parsePercent(row["4번 선택비율"]),
+    choiceRate5: parsePercent(row["5번 선택비율"]),
+    problemPosted: parseBoolean(row["문제게시YN"]),
+    problemWorker: problemWorker || undefined,
+    problemWorkDate,
+    solutionPosted: parseBoolean(row["해설게시YN"]),
+    solutionWorker: solutionWorker || undefined,
+    solutionWorkDate,
+  }
+}
+
 export function parseExcelFile(buffer: ArrayBuffer): ParseResult {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true })
   const sheetName = workbook.SheetNames[0]
@@ -242,123 +378,24 @@ export function parseExcelFile(buffer: ArrayBuffer): ParseResult {
     const firstRow = rawData[0] as Record<string, unknown>
     console.log("=== Excel Columns ===")
     console.log("Column names:", Object.keys(firstRow).join(", "))
-    console.log("First row data:", JSON.stringify(firstRow, null, 2))
-    console.log("====================")
   }
 
   const data: ParsedProblem[] = []
   const errors: Array<{ row: number; message: string }> = []
 
-  ;(rawData as Record<string, unknown>[]).forEach((row, index) => {
-    const rowNumber = index + 2 // 헤더 포함 + 1-indexed
+    ; (rawData as Record<string, unknown>[]).forEach((row, index) => {
+      const rowNumber = index + 2 // 헤더 포함 + 1-indexed
 
-    try {
-      // Worker와 Work_Date 처리 (문제/해설 구분)
-      let problemWorker: string | undefined
-      let problemWorkDate: Date | undefined
-      let solutionWorker: string | undefined
-      let solutionWorkDate: Date | undefined
-
-      // 컬럼 순서에 따라 Worker, Work_Date 매핑
-      const keys = Object.keys(row)
-      keys.forEach((key, i) => {
-        if (key === "Worker") {
-          // 첫 번째 Worker는 문제게시, 두 번째는 해설게시
-          const prevKeys = keys.slice(0, i)
-          const hasProblemPosted = prevKeys.some(k => k === "문제게시YN")
-          const hasSolutionPosted = prevKeys.some(k => k === "해설게시YN")
-
-          if (hasSolutionPosted) {
-            solutionWorker = row[key] as string
-          } else if (hasProblemPosted) {
-            problemWorker = row[key] as string
-          }
-        }
-        if (key === "Work_Date") {
-          const prevKeys = keys.slice(0, i)
-          const hasProblemPosted = prevKeys.some(k => k === "문제게시YN")
-          const hasSolutionPosted = prevKeys.some(k => k === "해설게시YN")
-
-          if (hasSolutionPosted) {
-            solutionWorkDate = parseDate(row[key])
-          } else if (hasProblemPosted) {
-            problemWorkDate = parseDate(row[key])
-          }
-        }
-      })
-
-      const indexVal = parseNumber(row["Index"])
-      const examYear = parseNumber(row["시행년도"])
-      const problemNumber = parseNumber(row["문항번호"])
-      const rawOrganization = row["출제기관"] as string
-      const organization = rawOrganization ? normalizeOrganization(rawOrganization) : ""
-      const subject = row["과목"] as string
-
-      // 필수 필드 검증
-      if (indexVal === undefined) {
-        errors.push({ row: rowNumber, message: "Index가 없습니다." })
-        return
+      try {
+        const problem = parseProblemRow(row, rowNumber)
+        data.push(problem)
+      } catch (err) {
+        errors.push({
+          row: rowNumber,
+          message: err instanceof Error ? err.message : "파싱 오류",
+        })
       }
-      if (!organization) {
-        errors.push({ row: rowNumber, message: "출제기관이 없습니다." })
-        return
-      }
-      if (!subject) {
-        errors.push({ row: rowNumber, message: "과목이 없습니다." })
-        return
-      }
-      if (examYear === undefined) {
-        errors.push({ row: rowNumber, message: "시행년도가 없습니다." })
-        return
-      }
-      if (problemNumber === undefined) {
-        errors.push({ row: rowNumber, message: "문항번호가 없습니다." })
-        return
-      }
-
-      // 시험지코드가 없으면 자동 생성
-      const problemType = row["문제종류"] as string || ""
-      const subCategory = row["소분류1"] as string || undefined
-      let examCode = row["시험지코드"] as string || ""
-      if (!examCode && problemType) {
-        examCode = generateExamCode(problemType, subject, rawOrganization, examYear, subCategory)
-      }
-
-      const problem: ParsedProblem = {
-        index: indexVal,
-        problemType: problemType || undefined,
-        examCode: examCode || undefined,
-        organization,
-        subject,
-        subCategory,
-        examYear,
-        problemNumber,
-        questionType: parseQuestionType(row["객관식주관식"]),
-        answer: row["정답"] ? String(row["정답"]) : undefined,
-        difficulty: row["난이도"] as string || undefined,
-        score: parseNumber(row["배점"]),
-        correctRate: parsePercent(row["정답률"]),
-        choiceRate1: parsePercent(row["1번 선택비율"]),
-        choiceRate2: parsePercent(row["2번 선택비율"]),
-        choiceRate3: parsePercent(row["3번 선택비율"]),
-        choiceRate4: parsePercent(row["4번 선택비율"]),
-        choiceRate5: parsePercent(row["5번 선택비율"]),
-        problemPosted: parseBoolean(row["문제게시YN"]),
-        problemWorker: problemWorker || undefined,
-        problemWorkDate,
-        solutionPosted: parseBoolean(row["해설게시YN"]),
-        solutionWorker: solutionWorker || undefined,
-        solutionWorkDate,
-      }
-
-      data.push(problem)
-    } catch (err) {
-      errors.push({
-        row: rowNumber,
-        message: err instanceof Error ? err.message : "파싱 오류",
-      })
-    }
-  })
+    })
 
   return {
     success: errors.length === 0,

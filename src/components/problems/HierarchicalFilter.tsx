@@ -168,36 +168,58 @@ export function HierarchicalFilter({
       {/* 사설 업체 필터 - 사설 선택 후에만 표시 */}
       {currentSubject && currentOrganization === "사설" && (
         <div className="flex items-center gap-2 overflow-x-auto pb-2">
-          <div className="flex items-center gap-1.5 text-slate-500 mr-2 shrink-0">
-            <ChevronRight className="h-4 w-4" />
-            <Users className="h-4 w-4" />
-            <span className="text-sm font-medium">업체</span>
-          </div>
-          <Button
-            variant={!currentPrivateOrg ? "default" : "outline"}
-            size="sm"
-            onClick={() => updateFilter("privateOrg", null)}
-            className={cn(
-              "h-8 px-3 text-sm whitespace-nowrap",
-              !currentPrivateOrg && "bg-purple-600 hover:bg-purple-700"
-            )}
-          >
-            전체
-          </Button>
-          {PRIVATE_ORGS.map((org) => (
-            <Button
-              key={org.key}
-              variant={currentPrivateOrg === org.key ? "default" : "outline"}
-              size="sm"
-              onClick={() => updateFilter("privateOrg", org.key)}
-              className={cn(
-                "h-8 px-3 text-sm whitespace-nowrap",
-                currentPrivateOrg === org.key && "bg-purple-600 hover:bg-purple-700"
-              )}
-            >
-              {org.label}
-            </Button>
-          ))}
+          {(() => {
+            // 1. 공식 기관과 '사설' 문자열 제외한 나머지를 사설 업체 리스트로 간주
+            const OFFICIAL = ["교육청", "평가원", "EBS"]
+            const dynamicPrivateOrgs = organizations
+              .filter(org => !OFFICIAL.includes(org) && org !== "사설")
+              .sort()
+
+            // 리스트가 비어있으면 안내 메시지 표시
+            if (dynamicPrivateOrgs.length === 0) {
+              return (
+                <div className="flex items-center gap-2 text-sm text-slate-500 py-1 pl-1">
+                  <ChevronRight className="h-4 w-4" />
+                  <span>세부 업체 정보가 없습니다 (데이터 갱신 필요)</span>
+                </div>
+              )
+            }
+
+            return (
+              <>
+                <div className="flex items-center gap-1.5 text-slate-500 mr-2 shrink-0">
+                  <ChevronRight className="h-4 w-4" />
+                  <Users className="h-4 w-4" />
+                  <span className="text-sm font-medium">업체</span>
+                </div>
+                <Button
+                  variant={!currentPrivateOrg ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => updateFilter("privateOrg", null)}
+                  className={cn(
+                    "h-8 px-3 text-sm whitespace-nowrap",
+                    !currentPrivateOrg && "bg-purple-600 hover:bg-purple-700"
+                  )}
+                >
+                  전체
+                </Button>
+                {dynamicPrivateOrgs.map((org) => (
+                  <Button
+                    key={org}
+                    variant={currentPrivateOrg === org ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => updateFilter("privateOrg", org)}
+                    className={cn(
+                      "h-8 px-3 text-sm whitespace-nowrap",
+                      currentPrivateOrg === org && "bg-purple-600 hover:bg-purple-700"
+                    )}
+                  >
+                    {org}
+                  </Button>
+                ))}
+              </>
+            )
+          })()}
         </div>
       )}
 

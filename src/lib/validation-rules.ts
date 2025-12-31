@@ -18,6 +18,32 @@ export interface ValidationRule {
 
 // 검수 규칙 정의
 export const validationRules: ValidationRule[] = [
+  // 기본 정보 누락 (미분류 등)
+  {
+    code: "MISSING_SUBJECT",
+    name: "과목 미분류",
+    severity: Severity.ERROR,
+    field: "subject",
+    check: (p) => p.subject === "미분류" || !p.subject,
+    getMessage: () => "과목이 지정되지 않았습니다.",
+  },
+  {
+    code: "MISSING_ORGANIZATION",
+    name: "출제기관 미분류",
+    severity: Severity.ERROR,
+    field: "organization",
+    check: (p) => p.organization === "미분류" || !p.organization,
+    getMessage: () => "출제기관이 지정되지 않았습니다.",
+  },
+  {
+    code: "MISSING_PROBLEM_NUMBER",
+    name: "문항번호 누락",
+    severity: Severity.ERROR,
+    field: "problemNumber",
+    check: (p) => p.problemNumber === 0 || p.problemNumber === null || p.problemNumber === undefined,
+    getMessage: () => "문항번호가 지정되지 않았습니다.",
+  },
+
   // 필수값 누락
   {
     code: "MISSING_EXAM_CODE",
@@ -160,6 +186,9 @@ export const validationRules: ValidationRule[] = [
 
 // 규칙 코드별 메시지 매핑 (대시보드용)
 export const ruleMessages: Record<string, string> = {
+  MISSING_SUBJECT: "과목 미분류",
+  MISSING_ORGANIZATION: "출제기관 미분류",
+  MISSING_PROBLEM_NUMBER: "문항번호 누락",
   MISSING_EXAM_CODE: "시험지코드 누락",
   MISSING_ANSWER: "정답 누락",
   MISSING_DIFFICULTY: "난이도 누락",

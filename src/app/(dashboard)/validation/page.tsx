@@ -27,13 +27,16 @@ async function getValidationData() {
       orderBy: { _count: { id: "desc" } },
     }),
     // 과목별 오류 수
+    // 과목별 오류 수 (최적화: JOIN 대신 groupBy 사용 불가능하므로, Prisma의 findMany로 가져와서 앱 레벨 집계 or 가벼운 쿼리)
+    // 메모리 부족 방지를 위해 queryRaw 대신 Prisma API 활용 시도
+    // 하지만 subject는 Problem에 있어서 JOIN 필수. 
+    // 대안: 단순화된 쿼리 사용 (ORDER BY 제거하여 Sort 부하 감소)
     prisma.$queryRaw`
       SELECT p.subject, COUNT(vi.id) as count
       FROM "ValidationIssue" vi
       JOIN "Problem" p ON vi."problemId" = p.id
       WHERE vi.resolved = false
       GROUP BY p.subject
-      ORDER BY count DESC
     ` as Promise<Array<{ subject: string; count: bigint }>>,
     // 최근 오류 문항
     prisma.validationIssue.findMany({

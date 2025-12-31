@@ -1,10 +1,12 @@
 generator client {
   provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_trgm]
 }
 
 // 사용자 (작업자 + 관리자)
@@ -73,6 +75,8 @@ model Problem {
 
   @@unique([subject, index])
   @@unique([examCode, problemNumber])
+  
+  // 기존 B-Tree 인덱스 (정확한 일치 검색용)
   @@index([subject, examYear])
   @@index([subject, organization])
   @@index([organization])
@@ -81,6 +85,15 @@ model Problem {
   @@index([problemPosted, solutionPosted])
   @@index([problemWorker])
   @@index([solutionWorker])
+
+  // GIN 인덱스 (검색 성능 최적화 - contains 쿼리용)
+  @@index([problemType(ops: raw("gin_trgm_ops"))], type: Gin, name: "problem_type_trgm_idx")
+  @@index([examCode(ops: raw("gin_trgm_ops"))], type: Gin, name: "exam_code_trgm_idx")
+  @@index([subject(ops: raw("gin_trgm_ops"))], type: Gin, name: "subject_trgm_idx")
+  @@index([organization(ops: raw("gin_trgm_ops"))], type: Gin, name: "organization_trgm_idx")
+
+  // Group By 최적화 (Covering Index)
+  @@index([examYear(sort: Desc), subject, examCode, organization])
 }
 
 enum QuestionType {
@@ -144,6 +157,8 @@ model UploadHistory {
   errorMessage String?
   uploadedBy   String
 
+  type        IngestionType @default(FILE)
+  
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 }
@@ -152,4 +167,18 @@ enum UploadStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+enum IngestionType {
+  FILE
+  GOOGLE_SHEET
+}
+
+// Crop 정산 단가표
+model CropRate {
+  id        String   @id @default(cuid())
+  subject   String   @unique // 과목명 (국어, 수학, 영어 등)
+  price     Int      @default(0) // 건당 단가 (원)
+  
+  updatedAt DateTime @updatedAt
 }

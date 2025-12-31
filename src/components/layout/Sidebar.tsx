@@ -11,6 +11,7 @@ import {
   Users,
   Settings,
   LogOut,
+  Scissors,
   ChevronRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -30,10 +31,16 @@ const navigation = [
     description: "문항 조회/수정",
   },
   {
-    name: "파일 업로드",
+    name: "Crop 정산",
+    href: "/crop",
+    icon: Scissors,
+    description: "작업량 및 정산",
+  },
+  {
+    name: "데이터 연동",
     href: "/upload",
     icon: Upload,
-    description: "데이터 가져오기",
+    description: "엑셀 및 구글 시트 연동",
   },
   {
     name: "검수 현황",
