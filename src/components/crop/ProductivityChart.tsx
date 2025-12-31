@@ -104,7 +104,7 @@ export function ProductivityChart({ data }: Props) {
                                 <XAxis dataKey="date" />
                                 <YAxis />
                                 <Tooltip
-                                    formatter={(value: number) => value.toLocaleString()}
+                                    formatter={(value: number | undefined) => (value || 0).toLocaleString()}
                                     labelFormatter={(label) => `${label}`}
                                 />
                                 <Legend />
