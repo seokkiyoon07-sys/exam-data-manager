@@ -49,9 +49,11 @@ export async function GET(request: NextRequest) {
                         send({ type: 'log', message: `[${config.label}] 데이터 파싱 및 저장 시작 (${sheets.length}개 탭)` })
 
                         for (const sheet of sheets) {
-                            // 필터링
-                            if (config.includeTabs && !config.includeTabs.includes(sheet.title)) continue
-                            if (config.excludeTabs && config.excludeTabs.includes(sheet.title)) continue
+                            // 필터링 (sheets 속성이 있는 경우)
+                            if ('sheets' in config && config.sheets) {
+                                const allowedSheets = config.sheets as readonly string[];
+                                if (!allowedSheets.includes(sheet.title)) continue;
+                            }
 
                             // 탭 이름 매핑 로직
                             const SUBJECT_MAPPING: Record<string, string> = {

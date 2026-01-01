@@ -8,52 +8,62 @@ import { useRouter } from "next/navigation"
 
 export function SheetSyncButton() {
     const [isLoading, setIsLoading] = useState(false)
+    const [progress, setProgress] = useState("")
     const router = useRouter()
 
     const handleSync = async () => {
         setIsLoading(true)
-        toast.info("구글 시트 동기화를 시작합니다...", {
-            description: "데이터 양에 따라 1~2분 정도 소요될 수 있습니다.",
-            duration: 5000,
-        })
+        setProgress("연결 중...")
 
         try {
-            // Manual trigger uses test=true to bypass Cron header check if needed,
-            // or we will modify the route to allow manual calls.
-            // Calling the API route
-            const response = await fetch("/api/cron/sync-sheets?test=true", {
+            const response = await fetch("/api/sheets/refresh", {
                 method: "GET",
             })
 
-            const data = await response.json()
-
-            if (!response.ok) {
-                throw new Error(data.error || "동기화 중 오류가 발생했습니다.")
+            if (!response.body) {
+                throw new Error("스트리밍을 지원하지 않습니다.")
             }
 
-            // 결과 요약
-            let totalSuccess = 0
-            let totalFailed = 0
-            let details = ""
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ""
 
-            Object.entries(data.results || {}).forEach(([key, sheets]: [string, any]) => {
-                if (Array.isArray(sheets)) {
-                    sheets.forEach(s => {
-                        if (s.success) totalSuccess += s.success
-                        if (s.failed) totalFailed += s.failed
-                    })
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                const chunk = decoder.decode(value, { stream: true })
+                buffer += chunk
+
+                const lines = buffer.split("\n\n")
+                buffer = lines.pop() || ""
+
+                for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                        try {
+                            const data = JSON.parse(line.slice(6))
+
+                            switch (data.type) {
+                                case 'start':
+                                case 'progress':
+                                    setProgress(data.message)
+                                    break
+                                case 'complete':
+                                    toast.success("캐시 갱신 완료!", {
+                                        description: data.message,
+                                    })
+                                    router.refresh()
+                                    break
+                                case 'error':
+                                    throw new Error(data.message)
+                            }
+                        } catch (e) {
+                            if (e instanceof Error && e.message !== "Unexpected end of JSON input") {
+                                throw e
+                            }
+                        }
+                    }
                 }
-            })
-
-            if (totalSuccess === 0 && totalFailed === 0) {
-                toast.info("변경사항이 없습니다.", {
-                    description: "모든 데이터가 최신 상태입니다.",
-                })
-            } else {
-                toast.success("동기화 완료!", {
-                    description: `성공: ${totalSuccess}건, 실패: ${totalFailed}건 업데이트됨.`,
-                })
-                router.refresh()
             }
 
         } catch (error) {
@@ -63,6 +73,7 @@ export function SheetSyncButton() {
             })
         } finally {
             setIsLoading(false)
+            setProgress("")
         }
     }
 
@@ -79,7 +90,7 @@ export function SheetSyncButton() {
             ) : (
                 <RefreshCw className="h-4 w-4" />
             )}
-            {isLoading ? "동기화 중..." : "구글 시트 동기화"}
+            {isLoading ? (progress || "동기화 중...") : "새로고침"}
         </Button>
     )
 }

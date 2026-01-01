@@ -5,13 +5,25 @@ export const SHEET_SYNC_CONFIG = {
         label: "공교육",
         // 명시된 탭만 가져옵니다.
         sheets: [
+            // 국영수
             "Korean_Labeling",
             "Math_Labeling",
             "English",
+            // 과탐
             "Physics_labeling",
             "CHE_labeling",
             "BIO_labeling",
-            "EAS_Labeling1"
+            "EAS_Labeling1",
+            // 사탐
+            "동아시아사",
+            "경제",
+            "정치와법",
+            "세계지리",
+            "한국지리",
+            "생활과윤리",
+            "세계사",
+            "윤리와사상",
+            "사회문화"
         ]
     },
     // 사설 (시대인재, 더프 등)

@@ -67,11 +67,9 @@ export interface SheetData {
 
 /**
  * 스프레드시트의 모든 시트(탭) 데이터를 가져옵니다.
- * (간단한 구현을 위해 순차적으로 가져옵니다. 필요 시 병렬 처리 가능)
  */
 export async function fetchSpreadsheetData(spreadsheetId: string): Promise<SheetData[]> {
     const sheetNames = await getSheetNames(spreadsheetId);
-    const results: SheetData[] = [];
 
     // 병렬로 모든 시트 데이터 가져오기
     const promises = sheetNames.map(async (title) => {
@@ -84,84 +82,135 @@ export async function fetchSpreadsheetData(spreadsheetId: string): Promise<Sheet
 }
 
 /**
- * 구글 시트의 한 행(Row Array)을 파싱하여 ParsedProblem 객체로 변환합니다.
- * Header Mapping은 호출하는 쪽에서 이미 Object로 변환했다고 가정하거나,
- * 여기서는 단순히 Object -> ParsedProblem 매핑을 담당할 수 있습니다.
- * 
- * 하지만 route.ts 로직을 보면 Object로 변환된 row를 받아서 처리하는게 아니라
- * 여기서 바로 처리하기를 원했던 것 같습니다.
- * 
- * 호환성을 위해 route.ts에서 Object로 변환한 `obj`를 인자로 받는 것으로 가정하고
- * rowObj -> ParsedProblem 변환 함수를 작성합니다.
+ * 구글 시트의 한 행(Row Object)을 파싱하여 ParsedProblem 객체로 변환합니다.
+ *
+ * 실제 스프레드시트 헤더:
+ * Index, 문제종류, 시험지코드, 출제기관, 과목, 소분류1, 시행년도, 문항번호,
+ * 정답, 난이도, 배점, 정답률, 1번 선택비율~5번 선택비율,
+ * 문제게시YN, Worker, Work_Date, 해설게시YN, Worker, Work_Date, 객관식주관식
  */
-export function parseRow(rowObj: Record<string, string>, rowIndex: number): ParsedProblem | null {
-    // 필수 필드 체크 (가장 기본적인 것만)
-    // 문제 번호나 정답 등이 없으면 스킵할 수도 있음
-
+export function parseRow(rowObj: Record<string, string>, _rowIndex: number): ParsedProblem | null {
     // 간단한 데이터 정제
-    const clean = (val: string) => val?.trim() || "";
+    const clean = (val: string | undefined) => val?.trim() || "";
 
-    // 숫자로 변환 (실패 시 0 or undefined)
-    const num = (val: string) => {
-        // %, 콤마 제거
+    // 숫자로 변환 (실패 시 0)
+    const num = (val: string | undefined) => {
         const s = clean(val).replace(/[%,\s]/g, "");
         const n = Number(s);
         return isNaN(n) ? 0 : n;
-    }
-    const numOrUndefined = (val: string) => {
+    };
+
+    // 숫자로 변환 (실패 시 undefined)
+    const numOrUndefined = (val: string | undefined) => {
         const s = clean(val).replace(/[%,\s]/g, "");
-        if (!s) return undefined; // 빈 문자열인 경우
+        if (!s) return undefined;
         const n = Number(s);
         return isNaN(n) ? undefined : n;
-    }
+    };
 
-    // 날짜 파싱 (YYYY-MM-DD or YYYY.MM.DD)
-    const date = (val: string): Date | undefined => {
-        const s = clean(val).replace(/\./g, "-");
+    // 날짜 파싱 (YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD)
+    const parseDate = (val: string | undefined): Date | undefined => {
+        const s = clean(val).replace(/[./]/g, "-");
         if (!s) return undefined;
         const d = new Date(s);
         return isNaN(d.getTime()) ? undefined : d;
-    }
+    };
 
-    // 인덱스가 없으면 문제 데이터로서 가치가 없음 (혹은 자동생성?)
-    // 현재 시스템상 Index는 필수라고 가정
-    const index = num(rowObj["Index"] || rowObj["인덱스"]);
-    if (!index) return null; // Skip invalid rows
+    // Boolean 변환 (Y, 완료, TRUE 등)
+    const toBool = (val: string | undefined): boolean => {
+        const s = clean(val).toUpperCase();
+        return s === "Y" || s === "완료" || s === "TRUE" || s === "1";
+    };
+
+    // Index는 필수 (대소문자 모두 지원: Index, index)
+    const index = num(rowObj["Index"]) || num(rowObj["index"]);
+    if (!index) return null;
+
+    // 객관식/주관식 변환
+    const questionTypeRaw = clean(rowObj["객관식주관식"]);
+    const questionType: 'MULTIPLE' | 'SUBJECTIVE' =
+        (questionTypeRaw === '객관식' || questionTypeRaw.toUpperCase() === 'MULTIPLE' || questionTypeRaw === 'M')
+            ? 'MULTIPLE'
+            : 'SUBJECTIVE';
+
+    // Worker 컬럼이 중복되므로, 헤더 순서에 따라 구분 필요
+    // 실제 데이터에서는 첫번째 Worker가 문제 작업자, 두번째가 해설 작업자
+    // 하지만 Object로 변환 시 같은 키는 덮어씌워지므로,
+    // 호출하는 쪽에서 별도 처리하거나 헤더를 다르게 변환해야 함
+    // 일단 rowObj에서 직접 접근하는 방식으로 처리
 
     return {
         // 필수 식별자
         index: index,
         subject: clean(rowObj["과목"]),
 
-        // 메타 데이터
-        problemType: clean(rowObj["문제 구분"]),
-        examCode: clean(rowObj["시험지 코드"]),
-        organization: clean(rowObj["시행 기관"]),
-        subCategory: clean(rowObj["세부 과목"]),
-        examYear: clean(rowObj["시행 연도"]),
-        problemNumber: numOrUndefined(rowObj["문제 번호"]),
+        // 메타 데이터 - 실제 헤더명으로 매핑
+        problemType: clean(rowObj["문제종류"]),
+        examCode: clean(rowObj["시험지코드"]),
+        organization: clean(rowObj["출제기관"]),
+        subCategory: clean(rowObj["소분류1"]),
+        examYear: num(rowObj["시행년도"]),
+        problemNumber: numOrUndefined(rowObj["문항번호"]) || 0,
 
         // 문제 속성
-        questionType: clean(rowObj["문제 유형"]),
+        questionType,
         answer: clean(rowObj["정답"]),
         difficulty: clean(rowObj["난이도"]),
         score: numOrUndefined(rowObj["배점"]),
 
-        // 정답률 통계
+        // 정답률 통계 - 실제 헤더명으로 매핑
         correctRate: numOrUndefined(rowObj["정답률"]),
-        choiceRate1: numOrUndefined(rowObj["①"]),
-        choiceRate2: numOrUndefined(rowObj["②"]),
-        choiceRate3: numOrUndefined(rowObj["③"]),
-        choiceRate4: numOrUndefined(rowObj["④"]),
-        choiceRate5: numOrUndefined(rowObj["⑤"]),
+        choiceRate1: numOrUndefined(rowObj["1번 선택비율"]),
+        choiceRate2: numOrUndefined(rowObj["2번 선택비율"]),
+        choiceRate3: numOrUndefined(rowObj["3번 선택비율"]),
+        choiceRate4: numOrUndefined(rowObj["4번 선택비율"]),
+        choiceRate5: numOrUndefined(rowObj["5번 선택비율"]),
 
-        // 작업 상태
-        problemPosted: clean(rowObj["문제 탑재"]) === "완료",
-        problemWorker: clean(rowObj["문제 작업자"]),
-        problemWorkDate: date(rowObj["문제 작업일"]),
+        // 작업 상태 - 실제 헤더명으로 매핑
+        // 문제게시YN, 해설게시YN
+        problemPosted: toBool(rowObj["문제게시YN"]),
+        solutionPosted: toBool(rowObj["해설게시YN"]),
 
-        solutionPosted: clean(rowObj["해설 탑재"]) === "완료",
-        solutionWorker: clean(rowObj["해설 작업자"]),
-        solutionWorkDate: date(rowObj["해설 작업일"]),
+        // Worker 컬럼 중복 문제:
+        // 호출 측에서 별도 처리 필요 (problemWorker, solutionWorker)
+        // 일단 Worker를 문제 작업자로 처리
+        problemWorker: clean(rowObj["Worker"]) || undefined,
+        problemWorkDate: parseDate(rowObj["Work_Date"]),
+
+        // 해설 작업자는 별도 키가 있다고 가정 (Worker_2, Work_Date_2 등)
+        // 또는 호출 측에서 인덱스 기반으로 처리
+        solutionWorker: clean(rowObj["Worker_해설"]) || clean(rowObj["해설Worker"]) || undefined,
+        solutionWorkDate: parseDate(rowObj["Work_Date_해설"]) || parseDate(rowObj["해설Work_Date"]),
     };
+}
+
+/**
+ * 헤더 배열과 데이터 행 배열을 Object로 변환
+ * 중복 헤더 처리: Worker, Work_Date가 두 번 나오면 두 번째는 _해설 접미사 추가
+ */
+export function rowToObject(header: string[], row: string[]): Record<string, string> {
+    const obj: Record<string, string> = {};
+    const usedKeys: Record<string, number> = {};
+
+    header.forEach((colName, idx) => {
+        if (!colName) return;
+
+        const trimmedName = colName.trim();
+
+        // 중복 키 처리 (Worker, Work_Date)
+        if (usedKeys[trimmedName] !== undefined) {
+            usedKeys[trimmedName]++;
+            // 두 번째 Worker/Work_Date는 해설용
+            if (trimmedName === "Worker" || trimmedName === "Work_Date") {
+                obj[`${trimmedName}_해설`] = row[idx] || "";
+            } else {
+                obj[`${trimmedName}_${usedKeys[trimmedName]}`] = row[idx] || "";
+            }
+        } else {
+            usedKeys[trimmedName] = 0;
+            obj[trimmedName] = row[idx] || "";
+        }
+    });
+
+    return obj;
 }

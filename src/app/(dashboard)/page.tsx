@@ -1,91 +1,86 @@
 export const dynamic = 'force-dynamic'
 
-import { FileText, CheckCircle, AlertTriangle, TrendingUp } from "lucide-react"
-import { unstable_cache } from "next/cache"
+import { FileText, CheckCircle, AlertTriangle, TrendingUp, RefreshCw } from "lucide-react"
 import { StatsCard } from "@/components/dashboard/StatsCard"
 import { ProgressChart } from "@/components/dashboard/ProgressChart"
 import { ValidationSummary } from "@/components/dashboard/ValidationSummary"
 import { RecentActivity } from "@/components/dashboard/RecentActivity"
-import { prisma } from "@/lib/db"
+import { Card, CardContent } from "@/components/ui/card"
+import {
+  getStatsFromCache,
+  getCacheStatus,
+  ensureCacheReady,
+} from "@/lib/sheet-cache"
+import { SheetSyncButton } from "@/components/problems/SheetSyncButton"
 
-// 대시보드 데이터 캐싱 (1분 캐시)
-const getDashboardData = unstable_cache(async () => {
-  // 단일 쿼리로 과목별 진행률 계산 (N+1 쿼리 방지)
-  const [
-    totalProblems,
-    problemPostedCount,
-    solutionPostedCount,
-    validationIssueCount,
-    subjectProgressData,
-    topIssues,
-    recentLogs,
-  ] = await Promise.all([
-    prisma.problem.count(),
-    prisma.problem.count({ where: { problemPosted: true } }),
-    prisma.problem.count({ where: { solutionPosted: true } }),
-    prisma.validationIssue.count({ where: { resolved: false } }),
-    // 단일 raw 쿼리로 과목별 통계 한번에 조회
-    prisma.$queryRaw<Array<{
-      subject: string
-      total: bigint
-      problemPosted: bigint
-      solutionPosted: bigint
-    }>>`
-      SELECT
-        subject,
-        COUNT(*) as total,
-        SUM(CASE WHEN "problemPosted" = true THEN 1 ELSE 0 END) as "problemPosted",
-        SUM(CASE WHEN "solutionPosted" = true THEN 1 ELSE 0 END) as "solutionPosted"
-      FROM "Problem"
-      GROUP BY subject
-      ORDER BY subject ASC
-    `,
-    prisma.validationIssue.groupBy({
-      by: ["ruleCode", "severity", "message"],
-      where: { resolved: false },
-      _count: { id: true },
-      orderBy: { _count: { id: "desc" } },
-      take: 5,
-    }),
-    prisma.workLog.findMany({
-      take: 10,
-      orderBy: { createdAt: "desc" },
-      include: { problem: true },
-    }),
-  ])
+async function getDashboardData() {
+  const cacheReady = await ensureCacheReady()
+
+  if (!cacheReady) {
+    return null
+  }
+
+  const stats = getStatsFromCache()
+
+  // 과목별 진행률 데이터 변환
+  const subjectProgress = Object.entries(stats.bySubject).map(([subject, data]) => ({
+    subject,
+    total: data.total,
+    problemPosted: data.problemPosted,
+    solutionPosted: data.solutionPosted,
+  })).sort((a, b) => a.subject.localeCompare(b.subject))
 
   return {
     stats: {
-      total: totalProblems,
-      problemPosted: problemPostedCount,
-      solutionPosted: solutionPostedCount,
-      issues: validationIssueCount,
+      total: stats.total,
+      problemPosted: stats.problemPosted,
+      solutionPosted: stats.solutionPosted,
+      issues: 0, // 캐시에서는 검수 이슈 미지원 (필요시 DB에서 조회)
     },
-    subjectProgress: subjectProgressData.map(s => ({
-      subject: s.subject,
-      total: Number(s.total),
-      problemPosted: Number(s.problemPosted),
-      solutionPosted: Number(s.solutionPosted),
-    })),
-    topIssues: topIssues.map((i) => ({
-      ruleCode: i.ruleCode,
-      message: i.message,
-      severity: i.severity,
-      count: i._count.id,
-    })),
-    recentActivities: recentLogs.map((log) => ({
-      id: log.id,
-      worker: log.problem.problemWorker || log.problem.solutionWorker || "시스템",
-      action: log.action === "CREATE" ? "등록" : log.action === "UPDATE" ? "수정" : log.action,
-      subject: log.problem.subject,
-      problemNumber: log.problem.problemNumber,
-      createdAt: log.createdAt,
-    })),
+    subjectProgress,
+    topIssues: [], // 캐시에서는 검수 이슈 미지원
+    recentActivities: [], // 캐시에서는 활동 로그 미지원
   }
-}, ["dashboard-data"], { revalidate: 60 })
+}
+
+function CacheNotReadyBanner() {
+  return (
+    <Card className="border-yellow-200 bg-yellow-50">
+      <CardContent className="py-8">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <RefreshCw className="h-12 w-12 text-yellow-600" />
+          <div>
+            <h3 className="font-semibold text-slate-900">데이터 로드 필요</h3>
+            <p className="text-sm text-slate-600 mt-1">
+              Google Sheets에서 데이터를 가져오려면 &ldquo;새로고침&rdquo; 버튼을 클릭하세요.
+            </p>
+          </div>
+          <SheetSyncButton />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default async function DashboardPage() {
   const data = await getDashboardData()
+  const cacheStatus = getCacheStatus()
+
+  if (!data) {
+    return (
+      <div className="space-y-8 animate-fade-in">
+        <div className="flex items-end justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-500 uppercase tracking-wider mb-1">
+              Overview
+            </p>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">대시보드</h1>
+          </div>
+        </div>
+        <CacheNotReadyBanner />
+      </div>
+    )
+  }
 
   const problemRate = data.stats.total > 0
     ? Math.round((data.stats.problemPosted / data.stats.total) * 100)
@@ -104,17 +99,23 @@ export default async function DashboardPage() {
           </p>
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">대시보드</h1>
         </div>
-        <div className="text-right">
-          <p className="text-sm text-slate-500">마지막 업데이트</p>
-          <p className="text-sm font-medium text-slate-700">
-            {new Date().toLocaleDateString("ko-KR", {
-              year: "numeric",
-              month: "long",
-              day: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </p>
+        <div className="flex items-center gap-4">
+          <SheetSyncButton />
+          <div className="text-right">
+            <p className="text-sm text-slate-500">마지막 업데이트</p>
+            <p className="text-sm font-medium text-slate-700">
+              {cacheStatus.lastUpdated
+                ? new Date(cacheStatus.lastUpdated).toLocaleDateString("ko-KR", {
+                    year: "numeric",
+                    month: "long",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "-"
+              }
+            </p>
+          </div>
         </div>
       </div>
 
@@ -154,10 +155,12 @@ export default async function DashboardPage() {
         <ValidationSummary issues={data.topIssues} />
       </div>
 
-      {/* Activity */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <RecentActivity activities={data.recentActivities} />
-      </div>
+      {/* Activity - 캐시 모드에서는 비활성화 */}
+      {data.recentActivities.length > 0 && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <RecentActivity activities={data.recentActivities} />
+        </div>
+      )}
     </div>
   )
 }

@@ -14,13 +14,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
-import { RefreshCw } from "lucide-react"
 
 interface CropRate {
-    id: string
     subject: string
     price: number
-    updatedAt: Date
 }
 
 interface Props {
@@ -29,12 +26,12 @@ interface Props {
 
 export function PricingConfig({ initialRates }: Props) {
     const [rates, setRates] = useState(initialRates)
-    const [editingId, setEditingId] = useState<string | null>(null)
+    const [editingSubject, setEditingSubject] = useState<string | null>(null)
     const [editPrice, setEditPrice] = useState<number>(0)
     const [loading, setLoading] = useState(false)
 
     const handleEdit = (rate: CropRate) => {
-        setEditingId(rate.id)
+        setEditingSubject(rate.subject)
         setEditPrice(rate.price)
     }
 
@@ -44,11 +41,11 @@ export function PricingConfig({ initialRates }: Props) {
             await updateCropRate(rate.subject, editPrice)
 
             // 낙관적 업데이트
-            setRates(rates.map(r => r.id === rate.id ? { ...r, price: editPrice } : r))
+            setRates(rates.map(r => r.subject === rate.subject ? { ...r, price: editPrice } : r))
 
-            setEditingId(null)
+            setEditingSubject(null)
             toast.success(`${rate.subject} 단가가 수정되었습니다.`)
-        } catch (e) {
+        } catch {
             toast.error("저장 중 오류가 발생했습니다.")
         } finally {
             setLoading(false)
@@ -56,7 +53,7 @@ export function PricingConfig({ initialRates }: Props) {
     }
 
     const handleCancel = () => {
-        setEditingId(null)
+        setEditingSubject(null)
     }
 
     return (
@@ -73,16 +70,15 @@ export function PricingConfig({ initialRates }: Props) {
                         <TableRow>
                             <TableHead>과목</TableHead>
                             <TableHead>현재 단가</TableHead>
-                            <TableHead className="text-right">최종 수정일</TableHead>
                             <TableHead className="w-[100px]"></TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {rates.map((rate) => (
-                            <TableRow key={rate.id}>
+                            <TableRow key={rate.subject}>
                                 <TableCell className="font-medium">{rate.subject}</TableCell>
                                 <TableCell>
-                                    {editingId === rate.id ? (
+                                    {editingSubject === rate.subject ? (
                                         <Input
                                             type="number"
                                             value={editPrice}
@@ -90,14 +86,11 @@ export function PricingConfig({ initialRates }: Props) {
                                             className="w-32"
                                         />
                                     ) : (
-                                        <span>₩{rate.price.toLocaleString()}</span>
+                                        <span>{rate.price.toLocaleString()}원</span>
                                     )}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-muted-foreground">
-                                    {new Date(rate.updatedAt).toLocaleDateString()}
-                                </TableCell>
                                 <TableCell>
-                                    {editingId === rate.id ? (
+                                    {editingSubject === rate.subject ? (
                                         <div className="flex gap-2">
                                             <Button size="sm" onClick={() => handleSave(rate)} disabled={loading}>저장</Button>
                                             <Button size="sm" variant="ghost" onClick={handleCancel}>취소</Button>
@@ -110,8 +103,8 @@ export function PricingConfig({ initialRates }: Props) {
                         ))}
                         {rates.length === 0 && (
                             <TableRow>
-                                <TableCell colSpan={4} className="text-center py-4 text-muted-foreground">
-                                    등록된 단가가 없습니다. 기본값(0원)으로 자동 계산됩니다.
+                                <TableCell colSpan={3} className="text-center py-4 text-muted-foreground">
+                                    등록된 단가가 없습니다. 기본값(100원)으로 자동 계산됩니다.
                                 </TableCell>
                             </TableRow>
                         )}
